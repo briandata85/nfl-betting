@@ -17,6 +17,15 @@ except ImportError:
 
 NFL_URL = "https://www.nfl.com/injuries/league/{season}/reg{week}"
 TEAM_CODES = {"Arizona Cardinals":"ARI","Atlanta Falcons":"ATL","Baltimore Ravens":"BAL","Buffalo Bills":"BUF","Carolina Panthers":"CAR","Chicago Bears":"CHI","Cincinnati Bengals":"CIN","Cleveland Browns":"CLE","Dallas Cowboys":"DAL","Denver Broncos":"DEN","Detroit Lions":"DET","Green Bay Packers":"GB","Houston Texans":"HOU","Indianapolis Colts":"IND","Jacksonville Jaguars":"JAX","Kansas City Chiefs":"KC","Las Vegas Raiders":"LV","Los Angeles Chargers":"LAC","Los Angeles Rams":"LA","Miami Dolphins":"MIA","Minnesota Vikings":"MIN","New England Patriots":"NE","New Orleans Saints":"NO","New York Giants":"NYG","New York Jets":"NYJ","Philadelphia Eagles":"PHI","Pittsburgh Steelers":"PIT","San Francisco 49ers":"SF","Seattle Seahawks":"SEA","Tampa Bay Buccaneers":"TB","Tennessee Titans":"TEN","Washington Commanders":"WAS"}
+TEAM_LABELS = {**{name.lower(): code for name, code in TEAM_CODES.items()}, **{
+    label.lower(): code for label, code in {
+        "Cardinals":"ARI", "Falcons":"ATL", "Ravens":"BAL", "Bills":"BUF", "Panthers":"CAR", "Bears":"CHI",
+        "Bengals":"CIN", "Browns":"CLE", "Cowboys":"DAL", "Broncos":"DEN", "Lions":"DET", "Packers":"GB",
+        "Texans":"HOU", "Colts":"IND", "Jaguars":"JAX", "Chiefs":"KC", "Raiders":"LV", "Chargers":"LAC",
+        "Rams":"LA", "Dolphins":"MIA", "Vikings":"MIN", "Patriots":"NE", "Saints":"NO", "Giants":"NYG",
+        "Jets":"NYJ", "Eagles":"PHI", "Steelers":"PIT", "49ers":"SF", "Seahawks":"SEA", "Buccaneers":"TB",
+        "Titans":"TEN", "Commanders":"WAS"}.items()}
+}
 
 
 def clean(value):
@@ -25,33 +34,43 @@ def clean(value):
 
 class Rows(HTMLParser):
     def __init__(self):
-        super().__init__(); self.rows = []; self.current = None; self.cell = None; self.text = []
+        super().__init__(); self.rows = []; self.current = None; self.cell = None; self.text = []; self.pending_team = None
     def handle_starttag(self, tag, attrs):
-        if tag == "tr": self.current = []
+        if tag == "tr": self.current = []; self.row_team = self.pending_team
         if tag in {"td", "th"} and self.current is not None: self.cell = tag; self.text = []
     def handle_data(self, data):
-        if self.cell: self.text.append(data)
+        if self.cell:
+            self.text.append(data)
+        else:
+            label = clean(data).lower()
+            if label in TEAM_LABELS: self.pending_team = TEAM_LABELS[label]
+            elif label == "no injuries reported" and self.pending_team:
+                self.rows.append((self.pending_team, ["No Injuries Reported"]))
     def handle_endtag(self, tag):
         if tag in {"td", "th"} and self.cell:
             self.current.append(clean(" ".join(self.text))); self.cell = None
         if tag == "tr" and self.current is not None:
-            if self.current: self.rows.append(self.current)
+            if self.current: self.rows.append((self.row_team, self.current))
             self.current = None
 
 
 def parse_report(html):
     parser = Rows(); parser.feed(html); team = None; records = []; found = set()
-    for cells in parser.rows:
+    for row_team, cells in parser.rows:
+        if row_team: team = row_team; found.add(row_team)
         joined = " ".join(cells)
-        if "No Injuries Reported" in joined: continue
-        for full, code in TEAM_CODES.items():
-            if full.lower() in joined.lower() and len(cells) <= 2:
+        if "No Injuries Reported" in joined:
+            for label, code in TEAM_LABELS.items():
+                if label in joined.lower(): team = code; found.add(code)
+            continue
+        for label, code in TEAM_LABELS.items():
+            if label in joined.lower() and len(cells) <= 2:
                 team = code; found.add(code); break
         if team and len(cells) >= 4 and cells[0].lower() not in {"player", "name"}:
             records.append({"team": team, "player_name": cells[0], "position": cells[1],
                             "injury": cells[2], "practice_status": cells[3],
                             "game_status": cells[4] if len(cells) > 4 else None})
-    return records, sorted(found)
+    return records, sorted(found | {r["team"] for r in records})
 
 
 def get_json(url, headers):
@@ -85,7 +104,10 @@ def main(argv=None):
         html = get_json("data:application/json,{}", {}) if False else None
         request = Request(NFL_URL.format(season=args.season, week=args.week), headers={"User-Agent":"nfl-betting injury loader"})
         with build_opener(NoRedirect()).open(request, timeout=60) as response: html = response.read().decode("utf-8", "replace")
-        records, found = parse_report(html); game_rows = games(url, key, args.season, args.week)
+        records, found = parse_report(html)
+        if not records and "Practice Status" in html:
+            raise ValueError("NFL.com page contains Practice Status but no injury rows were parsed")
+        game_rows = games(url, key, args.season, args.week)
         by_team = {t: g["game_id"] for g in game_rows for t in (g.get("home_team"), g.get("away_team"))}
         captured = datetime.now(timezone.utc).isoformat(); unmatched = sorted({r["team"] for r in records if r["team"] not in by_team})
         rows = [{**r, "game_id": by_team.get(r["team"]), "captured_at": captured, "source":"nfl.com"} for r in records if r["team"] in by_team]
