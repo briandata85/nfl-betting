@@ -104,38 +104,32 @@ class CollectorTests(unittest.TestCase):
 
     @patch.object(c, "utcnow", return_value=NOW)
     @patch.object(c, "request_json")
-    def test_pagination_filters_and_deduplication(self, request, clock):
-        request.side_effect = [{"success": True, "data": [event()], "nextCursor": "abc"},
+    def test_diagnostic_query_and_deduplication(self, request, clock):
+        request.side_effect = [{"success": True, "data": [event(), event()], "nextCursor": "abc"},
                                {"success": True, "data": [event()]}]
         result = c.fetch_events("secret/+&= value", NOW, NOW + timedelta(days=7))
         self.assertEqual(len(result), 1)
         query = parse_qs(urlsplit(request.call_args_list[0].args[0]).query)
-        self.assertEqual(query["leagueID"], ["NFL"])
-        self.assertEqual(query["started"], ["false"])
-        self.assertEqual(query["includeAltLines"], ["false"])
-        self.assertEqual(set(query["oddID"][0].split(",")), set(c.MARKETS))
-        self.assertEqual(query["apiKey"], ["secret/+&= value"])
+        self.assertEqual(query, {"apiKey": ["secret/+&= value"], "leagueID": ["NFL"],
+                                 "oddsAvailable": ["true"], "limit": ["100"]})
         self.assertTrue(all(call.args[1] == {} for call in request.call_args_list))
-        next_query = parse_qs(urlsplit(request.call_args_list[1].args[0]).query)
-        self.assertEqual(next_query.pop("cursor"), ["abc"])
-        self.assertEqual(query, next_query)
+        request.assert_called_once()
 
     @patch.object(c, "request_json")
-    def test_page_budget_and_repeated_cursor_fail(self, request):
-        request.return_value = {"success": True, "data": [], "nextCursor": "abc"}
-        with self.assertRaises(ValueError):
-            c.fetch_events("key", NOW, NOW, max_pages=1)
-        with self.assertRaises(ValueError):
-            c.fetch_events("key", NOW, NOW, max_pages=3)
+    def test_diagnostic_query_limit_is_always_100(self, request):
+        request.return_value = {"success": True, "data": []}
+        c.fetch_events("key", NOW, NOW, max_pages=1, limit=1)
+        query = parse_qs(urlsplit(request.call_args.args[0]).query)
+        self.assertEqual(query["limit"], ["100"])
+        request.assert_called_once()
 
     @patch.object(c, "request_json")
-    def test_cursor_404_is_end_but_rate_limit_is_failure(self, request):
-        request.side_effect = [{"success": True, "data": [], "nextCursor": "abc"},
-                               HTTPError("url", 404, "", {}, None)]
-        self.assertEqual(c.fetch_events("key", NOW, NOW), [])
-        request.side_effect = HTTPError("url", 429, "", {}, None)
-        with self.assertRaises(HTTPError):
-            c.fetch_events("key", NOW, NOW)
+    def test_diagnostic_http_errors_still_fail(self, request):
+        for code in (404, 429):
+            request.side_effect = HTTPError("url", code, "", {}, None)
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(HTTPError):
+                    c.fetch_events("key", NOW, NOW)
 
     @patch.object(c, "request_json")
     def test_provider_http_error_reports_json_without_retry(self, request):
@@ -199,7 +193,7 @@ class CollectorTests(unittest.TestCase):
 
     @patch.object(c, "request_json")
     @patch.object(c, "report_provider_error")
-    def test_cursor_end_and_supabase_errors_do_not_log_provider_body(self, report, request):
+    def test_success_and_supabase_errors_do_not_log_provider_body(self, report, request):
         request.side_effect = [{"success": True, "data": [], "nextCursor": "abc"},
                                HTTPError("url", 404, "", {}, None)]
         self.assertEqual(c.fetch_events("key", NOW, NOW), [])

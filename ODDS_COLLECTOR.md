@@ -1,5 +1,14 @@
 # NFL odds collector
 
+## Temporary diagnostic request
+
+The provider fetch currently makes one request with only `apiKey`, `leagueID=NFL`,
+`oddsAvailable=true`, and `limit=100`. It does not follow cursors or send the
+production filters described below. `--max-pages` and `--limit` are temporarily
+ignored for this fetch; `--days` still controls the Supabase game lookup.
+Dry-run mode, client-side pregame/market checks, and game matching remain active.
+The log reports when additional provider pages were not fetched.
+
 Uses the existing `games` and `odds_history` tables. No schema changes or new
 Python dependencies. Load the NFL schedule first.
 

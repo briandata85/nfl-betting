@@ -121,41 +121,28 @@ def report_provider_error(exc, key):
 
 
 def fetch_events(key, start, end, max_pages=4, limit=100):
-    params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "started": "false",
-              "live": "false", "ended": "false", "cancelled": "false",
-              "oddID": ",".join(MARKETS), "includeAltLines": "false",
-              "includeOpposingOdds": "false", "startsAfter": start.isoformat(),
-              "startsBefore": end.isoformat(), "limit": limit}
-    cursor = None
-    cursors = set()
+    # Diagnostic query: keep provider filters minimal. Client-side pregame,
+    # market selection, and Supabase matching checks still apply.
+    params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "limit": 100}
+    # Single-page diagnostic: no cursor or date/market filters are sent.
+    try:
+        page = request_json(f"{EVENTS_URL}?{urlencode(params)}", {})
+    except HTTPError as exc:
+        report_provider_error(exc, key)
+        raise
+    captured = utcnow()
+    if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
+        raise ValueError("Invalid provider response")
+    if page.get("nextCursor"):
+        print("Diagnostic fetch limited to one page; additional results were not fetched.")
     events = []
     event_ids = set()
-    for _ in range(max_pages):
-        query = dict(params)
-        if cursor:
-            query["cursor"] = cursor
-        try:
-            page = request_json(f"{EVENTS_URL}?{urlencode(query)}", {})
-        except HTTPError as exc:
-            if exc.code == 404 and cursor:
-                return events
-            report_provider_error(exc, key)
-            raise
-        captured = utcnow()
-        if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
-            raise ValueError("Invalid provider response")
-        for event in page["data"]:
-            event_id = event["eventID"]
-            if event_id not in event_ids:
-                events.append((event, captured))
-                event_ids.add(event_id)
-        cursor = page.get("nextCursor")
-        if not cursor:
-            return events
-        if not isinstance(cursor, str) or cursor in cursors:
-            raise ValueError("Repeated or invalid cursor")
-        cursors.add(cursor)
-    raise ValueError("Page budget exhausted; no snapshot will be inserted")
+    for event in page["data"]:
+        event_id = event["eventID"]
+        if event_id not in event_ids:
+            events.append((event, captured))
+            event_ids.add(event_id)
+    return events
 
 
 def team_code(team):
