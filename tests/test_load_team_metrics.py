@@ -73,6 +73,12 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(aaa["pass_epa_per_play"], 1.5)
         self.assertIsNone(aaa["rush_epa_per_play"])
 
+    def test_season_parameter_controls_filter_and_upsert_rows(self):
+        rows = m.rows_from_text(CSV.replace("2026", "2025"), 2025)
+        _, metrics = m.calculate(rows, None, 2025)
+        self.assertEqual({row["season"] for row in metrics}, {2025})
+        self.assertEqual(m.rows_from_text(CSV, 2025), [])
+
     @patch.object(m, "upsert")
     @patch.object(m, "credentials", return_value=("https://db.example", "key"))
     def test_dry_run_does_not_write(self, credentials, upsert):

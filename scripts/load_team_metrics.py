@@ -32,12 +32,12 @@ class NoCompletedWeek(ValueError):
     """The season has not produced a fully completed week yet."""
 
 
-def rows_from_text(text):
+def rows_from_text(text, season=SEASON):
     reader = csv.DictReader(io.StringIO(text))
     required = {"season", "week", "game_id", "posteam", "defteam", "epa", "yards_gained"}
     if not required.issubset(reader.fieldnames or []):
         raise ValueError("PBP is missing required columns.")
-    return [row for row in reader if row.get("season") == str(SEASON)]
+    return [row for row in reader if row.get("season") == str(season)]
 
 
 def completed_games(rows):
@@ -86,7 +86,7 @@ def is_kneel_or_spike(row):
     return row.get("qb_kneel") == "1" or row.get("qb_spike") == "1" or row.get("play_type") in {"qb_kneel", "qb_spike"}
 
 
-def calculate(rows, schedule=None):
+def calculate(rows, schedule=None, season=SEASON):
     if schedule is None:
         through_week = latest_completed_week(rows)
         completed = {game for week, games in completed_games(rows).items() if week.isdigit() and int(week) <= through_week for game in games}
@@ -119,7 +119,7 @@ def calculate(rows, schedule=None):
     result = []
     for team, s in sorted(stats.items()):
         plays = len(s["off"])
-        result.append({"season": SEASON, "through_week": through_week, "team": team,
+        result.append({"season": season, "through_week": through_week, "team": team,
                        "games_played": len(s["games"]), "offense_epa_per_play": avg(s["off"]),
                        "defense_epa_per_play": avg(s["def"]),
                        "offense_success_rate": avg(s.get("off_success", [])),
@@ -131,16 +131,16 @@ def calculate(rows, schedule=None):
     return through_week, result
 
 
-def load_sources():
+def load_sources(season=SEASON):
     """Load official nflreadpy Polars frames and convert them to plain rows."""
     if nfl is None:
         raise RuntimeError("nflreadpy is required to load live NFL data")
-    schedule = nfl.load_schedules(SEASON)
+    schedule = nfl.load_schedules(season)
     schedule_rows = schedule.to_dicts()
     # nflreadpy validates the requested season against its current-season data;
     # avoid the PBP call entirely until the schedule proves a completed week.
     schedule_completion(schedule_rows)
-    pbp = nfl.load_pbp(SEASON)
+    pbp = nfl.load_pbp(season)
     return pbp.to_dicts(), schedule_rows
 
 
@@ -163,21 +163,22 @@ def safe_error(exc):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--season", type=int, choices=(2025, 2026), default=SEASON)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.csv:
-            rows, schedule = rows_from_text(args.csv.read_text(encoding="utf-8-sig")), None
+            rows, schedule = rows_from_text(args.csv.read_text(encoding="utf-8-sig"), args.season), None
         else:
-            rows, schedule = load_sources()
-        through_week, metrics = calculate(rows, schedule)
+            rows, schedule = load_sources(args.season)
+        through_week, metrics = calculate(rows, schedule, args.season)
         if not args.dry_run:
             url, key = credentials(); upsert(metrics, url, key)
         print(json.dumps({"teams_loaded": len(metrics), "through_week": through_week, "dry_run": args.dry_run}))
         return 0
     except NoCompletedWeek:
-        print("No fully completed 2026 NFL week yet. Nothing to load.")
+        print(f"No fully completed {args.season} NFL week yet. Nothing to load.")
         return 0
     except Exception as exc:
         print(f"Team metrics load failed: {safe_error(exc)}")

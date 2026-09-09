@@ -1,7 +1,14 @@
-name: Load 2026 NFL Team Metrics
+name: Load NFL Team Metrics
 
 on:
   workflow_dispatch:
+    inputs:
+      season:
+        description: Season to load
+        required: true
+        type: choice
+        options: ['2025', '2026']
+        default: '2026'
 
 permissions:
   contents: read
@@ -16,8 +23,8 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
-      - name: Upsert completed 2026 team metrics
+      - name: Upsert completed team metrics
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: python scripts/load_team_metrics.py
+        run: python scripts/load_team_metrics.py --season "${{ inputs.season }}"
