@@ -56,6 +56,8 @@ def request_json(url, headers, payload=None):
     request = Request(url, headers=headers, method="GET" if payload is None else "POST",
                       data=None if payload is None else json.dumps(payload, allow_nan=False).encode())
     with build_opener(NoRedirect()).open(request, timeout=60) as response:
+        if url.startswith(EVENTS_URL + "?"):
+            print(f"SportsGameOdds HTTP status: {response.status}")
         if not 200 <= response.status < 300:
             raise ValueError("Non-success response")
         data = response.read()
@@ -126,13 +128,17 @@ def fetch_events(key, start, end, max_pages=4, limit=100):
     params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "limit": 100}
     # Single-page diagnostic: no cursor or date/market filters are sent.
     try:
-        page = request_json(f"{EVENTS_URL}?{urlencode(params)}", {})
+        # Match curl's generic accept header and identify this diagnostic as curl
+        # instead of urllib's default Python user agent. No auth headers are sent.
+        page = request_json(f"{EVENTS_URL}?{urlencode(params)}",
+                            {"Accept": "*/*", "User-Agent": "curl"})
     except HTTPError as exc:
         report_provider_error(exc, key)
         raise
     captured = utcnow()
     if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
         raise ValueError("Invalid provider response")
+    print(f"SportsGameOdds events fetched: {len(page['data'])}")
     if page.get("nextCursor"):
         print("Diagnostic fetch limited to one page; additional results were not fetched.")
     events = []

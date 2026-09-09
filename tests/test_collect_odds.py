@@ -4,7 +4,7 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
@@ -112,7 +112,7 @@ class CollectorTests(unittest.TestCase):
         query = parse_qs(urlsplit(request.call_args_list[0].args[0]).query)
         self.assertEqual(query, {"apiKey": ["secret/+&= value"], "leagueID": ["NFL"],
                                  "oddsAvailable": ["true"], "limit": ["100"]})
-        self.assertTrue(all(call.args[1] == {} for call in request.call_args_list))
+        self.assertEqual(request.call_args.args[1], {"Accept": "*/*", "User-Agent": "curl"})
         request.assert_called_once()
 
     @patch.object(c, "request_json")
@@ -122,6 +122,39 @@ class CollectorTests(unittest.TestCase):
         query = parse_qs(urlsplit(request.call_args.args[0]).query)
         self.assertEqual(query["limit"], ["100"])
         request.assert_called_once()
+
+    @patch.object(c, "build_opener")
+    def test_provider_wire_request_and_safe_success_logging(self, opener):
+        response = opener.return_value.open.return_value.__enter__.return_value
+        response.status = 200
+        response.read.return_value = json.dumps({
+            "success": True, "data": [event()], "nextCursor": "private-cursor"
+        }).encode()
+        with redirect_stdout(io.StringIO()) as output:
+            rows = c.fetch_events("private/+ key", NOW, NOW)
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(parse_qs(urlsplit(request.full_url).query), {
+            "apiKey": ["private/+ key"], "leagueID": ["NFL"],
+            "oddsAvailable": ["true"], "limit": ["100"],
+        })
+        self.assertNotIn("authorization", dict((k.lower(), v) for k, v in request.header_items()))
+        self.assertNotIn("x-api-key", dict((k.lower(), v) for k, v in request.header_items()))
+        opener.return_value.open.assert_called_once()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("SportsGameOdds HTTP status: 200", output.getvalue())
+        self.assertIn("SportsGameOdds events fetched: 1", output.getvalue())
+        self.assertNotIn("private", output.getvalue())
+        self.assertNotIn("https://", output.getvalue())
+
+    @patch.object(c, "build_opener")
+    def test_supabase_response_does_not_emit_provider_status(self, opener):
+        response = opener.return_value.open.return_value.__enter__.return_value
+        response.status = 200
+        response.read.return_value = b"[]"
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(c.request_json("https://db.example/rest/v1/games", {}), [])
+        self.assertEqual(output.getvalue(), "")
 
     @patch.object(c, "request_json")
     def test_diagnostic_http_errors_still_fail(self, request):
