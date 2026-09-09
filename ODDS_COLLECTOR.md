@@ -1,17 +1,18 @@
 # NFL odds collector
 
-## Temporary diagnostic request
+## Current provider request
 
-The provider fetch currently makes one request with only `apiKey`, `leagueID=NFL`,
-`oddsAvailable=true`, and `limit=100`. It does not follow cursors or send the
-production filters described below. `--max-pages` and `--limit` are temporarily
-ignored for this fetch; `--days` controls the Supabase game lookup and a Python-side
-event start-time window, from run start through run start plus that many days.
+The provider fetch sends only `apiKey`, `leagueID=NFL`, `oddsAvailable=true`,
+`limit=100`, `startsAfter`, and `startsBefore`. The UTC window is fixed at run start
+through run start plus `--days`. Further pages add only `cursor` and preserve all
+other parameters. `--max-pages` bounds requests (default four); exhausting that
+budget fails before inserts. `--limit` remains ignored in favor of 100.
+The same window controls the Supabase lookup and Python-side safety filter.
 Events outside the window are excluded before matching, never counted as unmatched.
 The summary reports fetched, in-window, excluded, matched, and unmatched events,
 plus odds rows parsed. In-window counts include events later excluded by pregame checks.
 Dry-run mode, client-side pregame/market checks, and game matching remain active.
-The log reports when additional provider pages were not fetched.
+Logs report per-page and total API event counts without keys or request URLs.
 
 Uses the existing `games` and `odds_history` tables. No schema changes or new
 Python dependencies. Load the NFL schedule first.
@@ -49,6 +50,7 @@ end of results; other HTTP errors fail without automatic retries.
 oddID is `{statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID}`. The collector
 requests exactly home/away `points-*-game-sp-*`, home/away `points-*-game-ml-*`,
 and `points-all-game-ou-over/under`, using the documented `oddID` query parameter.
+No oddID filter is currently sent to the API; these selections are parsed in Python.
 It reads `odds[oddID].byBookmaker[bookmakerID]`: `odds` (American price),
 `spread` or `overUnder` (line), and `available`. It never substitutes consensus
 prices. It ignores alternate arrays, team totals, subperiod markets, and props.
@@ -62,7 +64,7 @@ prices. It ignores alternate arrays, team totals, subperiod markets, and props.
 - No polling, per-book requests, team lookup requests, automatic retries, or
   quota-consuming live test when credentials are absent. Dry runs still consume
   provider quota. A smaller window reduces returned events as well as payload.
-- Server filters require NFL, available odds, not started/live/ended/cancelled.
+- Server filters require NFL, available odds, and the requested date window.
   Client checks repeat these conditions and require both the provider start and
   database kickoff to be in the future when preparing the insert. Missing status
   flags fail closed. An upstream incorrectly labelled event cannot be independently

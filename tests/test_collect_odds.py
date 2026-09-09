@@ -163,9 +163,14 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         query = parse_qs(urlsplit(request.call_args_list[0].args[0]).query)
         self.assertEqual(query, {"apiKey": ["secret/+&= value"], "leagueID": ["NFL"],
-                                 "oddsAvailable": ["true"], "limit": ["100"]})
+                                 "oddsAvailable": ["true"], "limit": ["100"],
+                                 "startsAfter": [NOW.isoformat()],
+                                 "startsBefore": [(NOW + timedelta(days=7)).isoformat()]})
         self.assertEqual(request.call_args.args[1], {"Accept": "*/*", "User-Agent": "curl"})
-        request.assert_called_once()
+        self.assertEqual(request.call_count, 2)
+        next_query = parse_qs(urlsplit(request.call_args.args[0]).query)
+        self.assertEqual(next_query.pop("cursor"), ["abc"])
+        self.assertEqual(next_query, query)
 
     @patch.object(c, "request_json")
     def test_diagnostic_query_limit_is_always_100(self, request):
@@ -175,12 +180,50 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(query["limit"], ["100"])
         request.assert_called_once()
 
+    @patch.object(c, "utcnow", return_value=NOW)
+    @patch.object(c, "request_json")
+    def test_request_param_diagnostic_excludes_key_and_url(self, request, clock):
+        request.return_value = {"success": True, "data": []}
+        with redirect_stdout(io.StringIO()) as output:
+            c.fetch_events("secret-key", NOW, NOW + timedelta(days=7))
+        line = next(line for line in output.getvalue().splitlines()
+                    if line.startswith("SportsGameOdds request params:"))
+        self.assertNotIn("secret-key", line)
+        self.assertNotIn("https://", line)
+        diagnostic = json.loads(line.split(": ", 1)[1])
+        self.assertEqual(set(diagnostic), {"leagueID", "oddsAvailable", "startsAfter",
+                                           "startsBefore", "limit"})
+        self.assertEqual(diagnostic["leagueID"], "NFL")
+        self.assertEqual(diagnostic["oddsAvailable"], "true")
+        self.assertEqual(diagnostic["limit"], 100)
+
+    @patch.object(c, "request_json")
+    def test_pagination_rejects_repeated_cursor_and_exhausted_budget(self, request):
+        request.return_value = {"success": True, "data": [], "nextCursor": "abc"}
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "Page budget exhausted"):
+                c.fetch_events("key", NOW, NOW, max_pages=1)
+            with self.assertRaisesRegex(ValueError, "Repeated or invalid cursor"):
+                c.fetch_events("key", NOW, NOW, max_pages=3)
+
+    @patch.dict(c.os.environ, {"SPORTSGAMEODDS_API_KEY": "private-key"})
+    @patch.object(c, "credentials", return_value=("https://db.example", "db-key"))
+    @patch.object(c, "fetch_games", return_value=[game()])
+    @patch.object(c, "request_json")
+    @patch.object(c, "insert_history")
+    def test_partial_pagination_failure_never_inserts(self, insert, request, games, credentials):
+        request.side_effect = [{"success": True, "data": [event()], "nextCursor": "abc"},
+                               HTTPError("url", 429, "", {}, None)]
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(c.main([]), 1)
+        insert.assert_not_called()
+
     @patch.object(c, "build_opener")
     def test_provider_wire_request_and_safe_success_logging(self, opener):
         response = opener.return_value.open.return_value.__enter__.return_value
         response.status = 200
         response.read.return_value = json.dumps({
-            "success": True, "data": [event()], "nextCursor": "private-cursor"
+            "success": True, "data": [event()]
         }).encode()
         with redirect_stdout(io.StringIO()) as output:
             rows = c.fetch_events("private/+ key", NOW, NOW)
@@ -189,6 +232,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(parse_qs(urlsplit(request.full_url).query), {
             "apiKey": ["private/+ key"], "leagueID": ["NFL"],
             "oddsAvailable": ["true"], "limit": ["100"],
+            "startsAfter": [NOW.isoformat()], "startsBefore": [NOW.isoformat()],
         })
         self.assertNotIn("authorization", dict((k.lower(), v) for k, v in request.header_items()))
         self.assertNotIn("x-api-key", dict((k.lower(), v) for k, v in request.header_items()))

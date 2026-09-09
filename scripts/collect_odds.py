@@ -123,32 +123,49 @@ def report_provider_error(exc, key):
 
 
 def fetch_events(key, start, end, max_pages=4, limit=100):
-    # Diagnostic query: keep provider filters minimal. Client-side pregame,
-    # market selection, and Supabase matching checks still apply.
-    params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "limit": 100}
-    # Single-page diagnostic: no cursor or date/market filters are sent.
-    try:
-        # Match curl's generic accept header and identify this diagnostic as curl
-        # instead of urllib's default Python user agent. No auth headers are sent.
-        page = request_json(f"{EVENTS_URL}?{urlencode(params)}",
-                            {"Accept": "*/*", "User-Agent": "curl"})
-    except HTTPError as exc:
-        report_provider_error(exc, key)
-        raise
-    captured = utcnow()
-    if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
-        raise ValueError("Invalid provider response")
-    print(f"SportsGameOdds events fetched: {len(page['data'])}")
-    if page.get("nextCursor"):
-        print("Diagnostic fetch limited to one page; additional results were not fetched.")
+    params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "limit": 100,
+              "startsAfter": start.astimezone(timezone.utc).isoformat(),
+              "startsBefore": end.astimezone(timezone.utc).isoformat()}
+    cursor = None
+    cursors = set()
     events = []
     event_ids = set()
-    for event in page["data"]:
-        event_id = event["eventID"]
-        if event_id not in event_ids:
-            events.append((event, captured))
-            event_ids.add(event_id)
-    return events
+    returned = 0
+    for _ in range(max_pages):
+        query = dict(params)
+        if cursor:
+            query["cursor"] = cursor
+        print("SportsGameOdds request params: " + json.dumps({
+            name: query[name] for name in
+            ("leagueID", "oddsAvailable", "startsAfter", "startsBefore", "limit")
+        }, ensure_ascii=True, sort_keys=True))
+        try:
+            page = request_json(f"{EVENTS_URL}?{urlencode(query)}",
+                                {"Accept": "*/*", "User-Agent": "curl"})
+        except HTTPError as exc:
+            if exc.code == 404 and cursor:
+                print(f"SportsGameOdds events fetched: {returned}")
+                return events
+            report_provider_error(exc, key)
+            raise
+        captured = utcnow()
+        if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
+            raise ValueError("Invalid provider response")
+        returned += len(page["data"])
+        print(f"SportsGameOdds page events: {len(page['data'])}; total returned: {returned}")
+        for event in page["data"]:
+            event_id = event["eventID"]
+            if event_id not in event_ids:
+                events.append((event, captured))
+                event_ids.add(event_id)
+        cursor = page.get("nextCursor")
+        if not cursor:
+            print(f"SportsGameOdds events fetched: {returned}")
+            return events
+        if not isinstance(cursor, str) or cursor in cursors:
+            raise ValueError("Repeated or invalid cursor")
+        cursors.add(cursor)
+    raise ValueError("Page budget exhausted; no snapshot will be inserted")
 
 
 def team_code(team):
