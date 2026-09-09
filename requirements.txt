@@ -1,0 +1,2 @@
+# Linux runners provide the IANA timezone database; Windows needs this fallback.
+tzdata>=2026.1; sys_platform == "win32"
