@@ -1,0 +1,55 @@
+name: Load NFL Next Gen QB Metrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: Season
+        required: true
+        type: choice
+        options: ['2025', '2026']
+        default: '2026'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/load_qb_nextgen.py'
+      - '.github/workflows/load-qb-nextgen.yml'
+  schedule:
+    # Tuesday 10:10 AM ET year-round via dual UTC schedules + local-time guard.
+    - cron: '10 14 * * 2'
+    - cron: '10 15 * * 2'
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+      - id: guard
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "push" || "$(TZ=America/New_York date +%H:%M)" == "10:10" ]]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Load Next Gen QB metrics
+        if: steps.guard.outputs.run == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SEASON: ${{ github.event_name == 'workflow_dispatch' && inputs.season || '2026' }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            python scripts/load_qb_nextgen.py --season 2025
+            python scripts/load_qb_nextgen.py --season 2026
+          else
+            python scripts/load_qb_nextgen.py --season "$SEASON"
+          fi
