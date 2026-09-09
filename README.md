@@ -8,6 +8,12 @@ workflow. Only full-game spreads, moneylines, and totals are collected.
 
 ## Load the 2026 schedule
 
+## Load completed 2026 team metrics
+
+Run **Actions > Load 2026 NFL Team Metrics > Run workflow**. The loader reads the
+current nflverse 2026 play-by-play release, stops at the latest fully completed
+week, and upserts one row per team into `team_metrics` without changing prior weeks.
+
 The loader downloads the CSV from the current nflverse schedules release:
 https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv
 
