@@ -26,8 +26,14 @@ def safe_int(value):
 
 
 def latest_rows(rows, season):
-    """Keep only the newest timestamped depth-chart snapshot for a season."""
-    filtered = [r for r in rows if safe_int(r.get("season")) == season and r.get("dt")]
+    """Keep only the newest timestamped depth-chart snapshot for a season-specific load."""
+    filtered = []
+    for row in rows:
+        row_season = safe_int(row.get("season"))
+        if row_season is not None and row_season != season:
+            continue
+        if row.get("dt"):
+            filtered.append(row)
     if not filtered:
         raise ValueError(f"No timestamped depth chart rows found for {season}")
     source_dt = max(str(r["dt"]) for r in filtered)
