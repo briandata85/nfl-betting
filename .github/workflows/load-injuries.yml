@@ -1,0 +1,30 @@
+name: Load NFL Injury Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: Season
+        required: true
+        default: '2026'
+      week:
+        description: Regular-season week
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  load-injuries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m unittest discover -s tests -v
+      - name: Load NFL.com injury snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python scripts/load_injuries.py --season "${{ inputs.season }}" --week "${{ inputs.week }}"
