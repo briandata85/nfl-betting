@@ -11,6 +11,28 @@ CSV = """season,week,game_id,result,posteam,defteam,epa,success,pass,rush,play_t
 """
 
 class MetricsTests(unittest.TestCase):
+    def test_no_completed_week_is_success_and_does_not_write(self):
+        incomplete = CSV.replace(",3,", ",,").replace(",7,", ",,")
+        with patch.object(m, "upsert") as upsert, patch.object(m.Path, "read_text", return_value=incomplete):
+            with patch("builtins.print") as printed:
+                self.assertEqual(m.main(["--csv", "fixture.csv"]), 0)
+        printed.assert_called_once_with("No fully completed 2026 NFL week yet. Nothing to load.")
+        upsert.assert_not_called()
+
+    @patch.dict(m.os.environ, {"SUPABASE_URL": "https://secret.example", "SUPABASE_SECRET_KEY": "service-secret"})
+    def test_failure_logs_safe_actual_error_without_credentials(self):
+        with patch.object(m, "fetch_pbp", side_effect=ValueError("bad PBP input")):
+            with patch("builtins.print") as printed:
+                self.assertEqual(m.main([]), 1)
+        printed.assert_called_once_with("Team metrics load failed: bad PBP input")
+
+    @patch.dict(m.os.environ, {"SUPABASE_URL": "https://secret.example", "SUPABASE_SECRET_KEY": "service-secret"})
+    def test_failure_redacts_credentials(self):
+        with patch.object(m, "fetch_pbp", side_effect=ValueError("service-secret https://secret.example")):
+            with patch("builtins.print") as printed:
+                self.assertEqual(m.main([]), 1)
+        self.assertEqual(printed.call_args.args[0], "Team metrics load failed: [REDACTED] [REDACTED]")
+
     def test_latest_completed_week_excludes_in_progress(self):
         rows = m.rows_from_text(CSV)
         through, metrics = m.calculate(rows)

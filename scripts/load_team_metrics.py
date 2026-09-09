@@ -25,6 +25,10 @@ METRIC_FIELDS = (
 )
 
 
+class NoCompletedWeek(ValueError):
+    """The season has not produced a fully completed week yet."""
+
+
 def rows_from_text(text):
     reader = csv.DictReader(io.StringIO(text))
     required = {"season", "week", "game_id", "posteam", "defteam", "epa", "yards_gained"}
@@ -47,7 +51,7 @@ def latest_completed_week(rows):
     completed = completed_games(rows)
     weeks = sorted(int(week) for week, games in completed.items() if games and week.isdigit())
     if not weeks:
-        raise ValueError("No completed 2026 games found.")
+        raise NoCompletedWeek("No completed 2026 games found.")
     return weeks[-1]
 
 
@@ -117,6 +121,15 @@ def upsert(rows, url, key):
         if not 200 <= response.status < 300: raise ValueError("Supabase returned a non-success status.")
 
 
+def safe_error(exc):
+    """Return useful diagnostics while removing configured credentials."""
+    message = str(exc) or exc.__class__.__name__
+    for secret in (os.environ.get("SUPABASE_SECRET_KEY", ""), os.environ.get("SUPABASE_URL", "")):
+        if secret:
+            message = message.replace(secret, "[REDACTED]")
+    return message.replace("\r", " ").replace("\n", " ")[:500]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -130,8 +143,11 @@ def main(argv=None):
             url, key = credentials(); upsert(metrics, url, key)
         print(json.dumps({"teams_loaded": len(metrics), "through_week": through_week, "dry_run": args.dry_run}))
         return 0
-    except Exception:
-        print("Team metrics load failed. Check source data, credentials, and schema.")
+    except NoCompletedWeek:
+        print("No fully completed 2026 NFL week yet. Nothing to load.")
+        return 0
+    except Exception as exc:
+        print(f"Team metrics load failed: {safe_error(exc)}")
         return 1
 
 
