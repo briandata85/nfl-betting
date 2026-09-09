@@ -12,7 +12,9 @@ from scripts import load_schedule as loader
 def schedule(**changes):
     row = dict(game_id="2026_01_NE_SEA", season="2026", week="1",
                gameday="2026-09-09", gametime="20:20", away_team="NE",
-               home_team="SEA", stadium="Lumen Field", roof="outdoors", surface="fieldturf")
+               home_team="SEA", stadium="Lumen Field", roof="outdoors", surface="fieldturf",
+               game_type="REG", away_score="", home_score="", result="", total="",
+               away_moneyline="", home_moneyline="", spread_line="", total_line="")
     row.update(changes)
     return row
 
@@ -32,7 +34,22 @@ class ScheduleTests(unittest.TestCase):
             game_id="2026_01_NE_SEA", season=2026, week=1,
             game_date="2026-09-09", kickoff="2026-09-10T00:20:00+00:00",
             away_team="NE", home_team="SEA", stadium="Lumen Field",
-            roof="outdoors", surface="fieldturf")])
+            roof="outdoors", surface="fieldturf", game_type="REG",
+            away_score=None, home_score=None, result=None, total=None,
+            nflverse_away_moneyline=None, nflverse_home_moneyline=None,
+            nflverse_spread_line=None, nflverse_total_line=None)])
+
+    def test_result_and_market_fields(self):
+        game = loader.parse_schedule(csv_text(schedule(
+            away_score="20", home_score="24", result="4", total="44",
+            away_moneyline="+160", home_moneyline="-185",
+            spread_line="-3.5", total_line="46.5")))[0]
+        self.assertEqual((game["away_score"], game["home_score"], game["result"], game["total"]),
+                         (20, 24, 4, 44))
+        self.assertEqual((game["nflverse_away_moneyline"], game["nflverse_home_moneyline"]),
+                         (160, -185))
+        self.assertEqual((game["nflverse_spread_line"], game["nflverse_total_line"]),
+                         (-3.5, 46.5))
 
     def test_january_stays_in_2026_season_and_uses_standard_time(self):
         game = loader.parse_schedule(csv_text(schedule(gameday="2027-01-03", gametime="20:20")))[0]
@@ -51,7 +68,7 @@ class ScheduleTests(unittest.TestCase):
     def test_invalid_source_fails_before_writes(self):
         for text in ("season\n2026\n", csv_text(schedule(season="2025")),
                      csv_text(schedule(), schedule()), csv_text(schedule(game_id="")),
-                     csv_text(schedule(gametime="25:00"))):
+                     csv_text(schedule(gametime="25:00")), csv_text(schedule(home_score="3.5"))):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 loader.parse_schedule(text)
 

@@ -1,4 +1,4 @@
-"""Load the 2026 nflverse schedule into Supabase using only the standard library."""
+"""Load the 2026 nflverse schedule/results into Supabase using only the standard library."""
 
 import argparse
 import csv
@@ -25,8 +25,27 @@ FIELDS = {
 
 
 def nullable(value):
-    value = (value or "").strip()
+    value = str(value or "").strip()
     return None if value.upper() in {"", "NA", "N/A", "NULL", "NAN", "TBD"} else value
+
+
+def numeric(value):
+    value = nullable(value)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid numeric schedule value: {value}") from exc
+
+
+def integer(value):
+    value = numeric(value)
+    if value is None:
+        return None
+    if not value.is_integer():
+        raise ValueError("Expected an integer schedule value.")
+    return int(value)
 
 
 def parse_schedule(text):
@@ -58,6 +77,15 @@ def parse_schedule(text):
                 .astimezone(timezone.utc).isoformat()
                 if gameday and gametime else None
             ),
+            game_type=nullable(row.get("game_type")),
+            away_score=integer(row.get("away_score")),
+            home_score=integer(row.get("home_score")),
+            result=integer(row.get("result")),
+            total=integer(row.get("total")),
+            nflverse_away_moneyline=integer(row.get("away_moneyline")),
+            nflverse_home_moneyline=integer(row.get("home_moneyline")),
+            nflverse_spread_line=numeric(row.get("spread_line")),
+            nflverse_total_line=numeric(row.get("total_line")),
         )
         if game["week"] < 1:
             raise ValueError("Schedule has an invalid week.")
@@ -125,7 +153,8 @@ def main(argv=None):
             print(f"Validated {len(games)} games for {SEASON}; no database writes.")
         else:
             upsert_games(games, url, key)
-            print(f"Upserted {len(games)} games for {SEASON}.")
+            completed = sum(game["home_score"] is not None and game["away_score"] is not None for game in games)
+            print(f"Upserted {len(games)} games for {SEASON}; {completed} have final scores.")
         return 0
     except HTTPError as exc:
         print(f"Schedule load failed (HTTP {exc.code}).", file=sys.stderr)
