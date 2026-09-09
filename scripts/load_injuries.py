@@ -9,6 +9,7 @@ import os
 import re
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
+from urllib.error import HTTPError
 
 try:
     from .load_schedule import NoRedirect, credentials
@@ -92,8 +93,18 @@ def insert(url, key, rows):
     headers = {"apikey": key, "Content-Type":"application/json", "Prefer":"return=minimal"}
     if not key.startswith("sb_secret_"): headers["Authorization"] = f"Bearer {key}"
     request = Request(f"{url}/rest/v1/injury_history", data=json.dumps(rows).encode(), headers=headers, method="POST")
-    with build_opener(NoRedirect()).open(request, timeout=60) as response:
-        if not 200 <= response.status < 300: raise ValueError("Supabase insert failed")
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=60) as response:
+            if not 200 <= response.status < 300: raise ValueError("Supabase insert failed")
+    except HTTPError as exc:
+        body = exc.read(16384).decode("utf-8", "replace")
+        try:
+            detail = json.dumps(json.loads(body), ensure_ascii=True)
+        except (ValueError, TypeError):
+            detail = "response body was not JSON"
+        for secret in (key, os.environ.get("SUPABASE_URL", "")):
+            if secret: detail = detail.replace(secret, "[REDACTED]")
+        raise RuntimeError(f"Supabase HTTP {exc.code}: {detail}") from exc
 
 
 def main(argv=None):
@@ -110,7 +121,7 @@ def main(argv=None):
         game_rows = games(url, key, args.season, args.week)
         by_team = {t: g["game_id"] for g in game_rows for t in (g.get("home_team"), g.get("away_team"))}
         captured = datetime.now(timezone.utc).isoformat(); unmatched = sorted({r["team"] for r in records if r["team"] not in by_team})
-        rows = [{**r, "game_id": by_team.get(r["team"]), "captured_at": captured, "source":"nfl.com"} for r in records if r["team"] in by_team]
+        rows = [{**r, "season": args.season, "week": args.week, "game_id": by_team.get(r["team"]), "captured_at": captured, "source":"nfl.com"} for r in records if r["team"] in by_team]
         insert(url, key, rows)
         print(json.dumps({"teams_found": len(found), "players_found": len(records), "rows_inserted": len(rows), "unmatched_teams": unmatched}))
         return 0

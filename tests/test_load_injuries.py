@@ -1,4 +1,7 @@
 import unittest
+import io
+import json
+from urllib.error import HTTPError
 from unittest.mock import patch
 from scripts import load_injuries as m
 
@@ -15,5 +18,13 @@ class InjuryTests(unittest.TestCase):
         game_rows = [{"game_id": "g1", "home_team": "SEA", "away_team": "NE"}]
         by_team = {t: g["game_id"] for g in game_rows for t in (g["home_team"], g["away_team"])}
         self.assertEqual(by_team[rows[0]["team"]], "g1")
+
+    @patch.object(m, "build_opener")
+    def test_supabase_insert_reports_safe_http_body(self, opener):
+        error = HTTPError("https://db.example", 400, "bad", {}, io.BytesIO(
+            b'{"message":"season is required","hint":"secret-key"}'))
+        opener.return_value.open.side_effect = error
+        with self.assertRaisesRegex(RuntimeError, r"Supabase HTTP 400.*season is required"):
+            m.insert("https://db.example", "secret-key", [{"season": 2026, "week": 1}])
 
 if __name__ == "__main__": unittest.main()
