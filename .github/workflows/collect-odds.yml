@@ -31,6 +31,57 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+      - name: Temporary SportsGameOdds curl diagnostic
+        env:
+          SPORTSGAMEODDS_API_KEY: ${{ secrets.SPORTSGAMEODDS_API_KEY }}
+        shell: bash
+        run: |
+          set +x
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+          http_status=$(curl --silent --get \
+            --connect-timeout 10 --max-time 60 \
+            --output "$response_file" --write-out '%{http_code}' \
+            --data-urlencode "apiKey=$SPORTSGAMEODDS_API_KEY" \
+            --data-urlencode 'leagueID=NFL' \
+            --data-urlencode 'oddsAvailable=true' \
+            --data-urlencode 'limit=1' \
+            'https://api.sportsgameodds.com/v2/events') || true
+          printf 'HTTP status: %s\n' "$http_status"
+          python - "$response_file" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from urllib.parse import quote, quote_plus
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as response:
+                  body = json.load(response)
+          except (ValueError, OSError):
+              sys.exit(0)
+          if not isinstance(body, dict):
+              sys.exit(0)
+
+          key = os.environ.get("SPORTSGAMEODDS_API_KEY", "")
+          def sanitize(value):
+              if isinstance(value, str):
+                  if key:
+                      for secret in (key, quote(key, safe=""), quote_plus(key)):
+                          value = value.replace(secret, "[REDACTED]")
+                  return re.sub(r"https?://\S+", "[URL omitted]", value)
+              if isinstance(value, list):
+                  return [sanitize(item) for item in value]
+              if isinstance(value, dict):
+                  return {sanitize(k): sanitize(v) for k, v in value.items()}
+              return value
+
+          print(json.dumps({
+              "success": body.get("success") if isinstance(body.get("success"), bool) else None,
+              "error": sanitize(body.get("error")),
+              "data_items": len(body["data"]) if isinstance(body.get("data"), list) else 0,
+          }, ensure_ascii=True))
+          PY
       - name: Collect pregame odds
         env:
           SPORTSGAMEODDS_API_KEY: ${{ secrets.SPORTSGAMEODDS_API_KEY }}
