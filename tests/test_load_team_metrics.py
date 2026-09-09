@@ -31,6 +31,12 @@ class MetricsTests(unittest.TestCase):
         ]
         self.assertEqual(m.schedule_completion(schedule), (2, {"2": {"g3"}}))
 
+    def test_tie_result_zero_counts_as_completed(self):
+        schedule = [
+            {"game_id": "g1", "week": 1, "game_type": "REG", "result": 0},
+        ]
+        self.assertEqual(m.schedule_completion(schedule), (1, {"1": {"g1"}}))
+
     def test_schedule_no_completed_week_raises_specific_exception(self):
         with self.assertRaises(m.NoCompletedWeek):
             m.schedule_completion([{"game_id": "g1", "week": 1, "game_type": "REG", "result": None}])

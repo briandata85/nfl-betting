@@ -40,12 +40,31 @@ def rows_from_text(text, season=SEASON):
     return [row for row in reader if row.get("season") == str(season)]
 
 
+def has_value(value):
+    """Return True for populated scalar values, including numeric zero."""
+    return value is not None and str(value).strip() != ""
+
+
+def normalized_week(value):
+    """Normalize CSV/Polars week values to digit strings."""
+    if not has_value(value):
+        return None
+    text = str(value).strip()
+    try:
+        return str(int(text))
+    except ValueError:
+        return None
+
+
 def completed_games(rows):
     """Return game IDs with a final result, grouped by week."""
     games = defaultdict(set)
     for row in rows:
-        game_id, week = row.get("game_id"), row.get("week")
-        if not game_id or not week or row.get("result", "").strip():
+        game_id = row.get("game_id")
+        week = normalized_week(row.get("week"))
+        if not game_id or week is None:
+            continue
+        if has_value(row.get("result")):
             games[week].add(game_id)
     return games
 
@@ -54,12 +73,12 @@ def schedule_completion(schedule):
     regular = [row for row in schedule if str(row.get("game_type", "REG")).upper() == "REG"]
     by_week = defaultdict(list)
     for row in regular:
-        week = str(row.get("week", ""))
-        if week.isdigit():
+        week = normalized_week(row.get("week"))
+        if week is not None:
             by_week[week].append(row)
     complete = {}
     for week, games in by_week.items():
-        if games and all(str(row.get("result", "") or "").strip() for row in games):
+        if games and all(has_value(row.get("result")) for row in games):
             complete[week] = {row.get("game_id") for row in games if row.get("game_id")}
     if not complete:
         raise NoCompletedWeek("No completed schedule week found.")
@@ -68,7 +87,7 @@ def schedule_completion(schedule):
 
 def latest_completed_week(rows):
     completed = completed_games(rows)
-    weeks = sorted(int(week) for week, games in completed.items() if games and week.isdigit())
+    weeks = sorted(int(week) for week, games in completed.items() if games)
     if not weeks:
         raise NoCompletedWeek("No completed 2026 games found.")
     return weeks[-1]
@@ -83,7 +102,7 @@ def num(value):
 
 
 def binary_flag(value):
-    """Normalize nflverse 0/1 success values from CSV or Polars rows."""
+    """Normalize nflverse 0/1 values from CSV or Polars rows."""
     if isinstance(value, bool):
         return int(value)
     parsed = num(value)
@@ -95,13 +114,17 @@ def binary_flag(value):
 
 
 def is_kneel_or_spike(row):
-    return row.get("qb_kneel") == "1" or row.get("qb_spike") == "1" or row.get("play_type") in {"qb_kneel", "qb_spike"}
+    return (
+        binary_flag(row.get("qb_kneel")) == 1
+        or binary_flag(row.get("qb_spike")) == 1
+        or row.get("play_type") in {"qb_kneel", "qb_spike"}
+    )
 
 
 def calculate(rows, schedule=None, season=SEASON):
     if schedule is None:
         through_week = latest_completed_week(rows)
-        completed = {game for week, games in completed_games(rows).items() if week.isdigit() and int(week) <= through_week for game in games}
+        completed = {game for week, games in completed_games(rows).items() if int(week) <= through_week for game in games}
     else:
         through_week, complete_by_week = schedule_completion(schedule)
         completed = {game for week, games in complete_by_week.items() if int(week) <= through_week for game in games}
@@ -120,9 +143,9 @@ def calculate(rows, schedule=None, season=SEASON):
         if success is not None:
             off.setdefault("off_success", []).append(success); deff.setdefault("def_success", []).append(success)
         if not is_kneel_or_spike(row):
-            if row.get("pass") == "1" or row.get("pass") == 1 or row.get("play_type") in {"pass", "qb_scramble"}:
+            if binary_flag(row.get("pass")) == 1 or row.get("play_type") in {"pass", "qb_scramble"}:
                 off["pass"].append(epa)
-            if row.get("rush") == "1" or row.get("rush") == 1 or row.get("play_type") == "run":
+            if binary_flag(row.get("rush")) == 1 or row.get("play_type") == "run":
                 off["rush"].append(epa)
         if yards is not None and yards >= 20:
             off["explosive"] += 1

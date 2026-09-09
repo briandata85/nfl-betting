@@ -26,7 +26,7 @@ class PlayerMetricsTests(unittest.TestCase):
     @patch.object(m, "nfl")
     def test_load_error_identifies_call(self, nfl):
         nfl.load_player_stats.side_effect = RuntimeError("download failed")
-        with self.assertRaisesRegex(RuntimeError, "load_player_stats\(2025, summary_level='reg'\)"):
+        with self.assertRaisesRegex(RuntimeError, r"load_player_stats\(2025, summary_level='reg'\)"):
             m.load_rows()
     def test_regular_aggregation_and_team_shares(self):
         rows = m.calculate(ROWS)
