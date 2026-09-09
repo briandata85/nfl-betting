@@ -43,7 +43,8 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(all("player_id" not in r for r in rows))
         self.assertEqual(rows[0]["line"], "0")
         self.assertIsNone(next(r for r in rows if r["market"] == "moneyline")["line"])
-        self.assertEqual(sum(counts.values()), 0)
+        self.assertEqual(counts, {"in_window_events": 1, "matched_events": 1,
+                                 "excluded_events": 0, "unmatched_events": 0, "invalid_quotes": 0})
 
     def test_each_book_is_a_separate_row(self):
         e = event()
@@ -53,6 +54,57 @@ class CollectorTests(unittest.TestCase):
         rows, _ = c.snapshots([(e, NOW)], [game()], NOW)
         row = next(r for r in rows if r["sportsbook"] == "fanduel")
         self.assertEqual((row["line"], row["odds_american"]), ("-3.5", 120))
+
+    @patch.object(c, "match_game", wraps=c.match_game)
+    def test_window_excludes_before_matching_and_handles_timezone_boundaries(self, match):
+        end = NOW + timedelta(days=7)
+        events = []
+        for start in (NOW - timedelta(seconds=1), end + timedelta(seconds=1),
+                      end.astimezone(timezone(timedelta(hours=-4)))):
+            e = event()
+            e["status"]["startsAt"] = start.isoformat()
+            events.append((e, NOW))
+        rows, counts = c.snapshots(events, [], NOW, NOW, end)
+        self.assertEqual(rows, [])
+        self.assertEqual(counts["excluded_events"], 2)
+        self.assertEqual(counts["in_window_events"], 1)
+        self.assertEqual(counts["unmatched_events"], 1)
+        match.assert_called_once_with(events[2][0], [])
+
+    @patch.object(c, "match_game")
+    def test_window_start_remains_excluded_by_pregame_check(self, match):
+        e = event()
+        e["status"]["startsAt"] = NOW.isoformat()
+        rows, counts = c.snapshots([(e, NOW)], [], NOW)
+        self.assertEqual(rows, [])
+        self.assertEqual(counts["in_window_events"], 1)
+        self.assertEqual(counts["excluded_events"], 1)
+        self.assertEqual(counts["unmatched_events"], 0)
+        match.assert_not_called()
+
+    @patch.object(c, "utcnow", return_value=NOW)
+    @patch.object(c.Path, "read_text")
+    @patch.object(c, "insert_history")
+    def test_days_window_summary_and_unmatched_exit_status(self, insert, read, clock):
+        distant = event()
+        distant["eventID"] = "distant"
+        distant["status"]["startsAt"] = (NOW + timedelta(days=2)).isoformat()
+        for days, expected_status, excluded, unmatched in ((1, 0, 1, 0), (3, 1, 0, 1)):
+            with self.subTest(days=days):
+                read.side_effect = [json.dumps([game()]), json.dumps({
+                    "success": True, "data": [event(), distant]})]
+                with redirect_stdout(io.StringIO()) as output:
+                    status = c.main(["--dry-run", "--days", str(days),
+                                     "--events-json", "events.json", "--games-json", "games.json"])
+                self.assertEqual(status, expected_status)
+                summary = json.loads(output.getvalue())
+                self.assertEqual(summary["fetched_events"], 2)
+                self.assertEqual(summary["in_window_events"], 2 - excluded)
+                self.assertEqual(summary["excluded_events"], excluded)
+                self.assertEqual(summary["matched_events"], 1)
+                self.assertEqual(summary["unmatched_events"], unmatched)
+                self.assertEqual(summary["odds_rows_parsed"], 6)
+        insert.assert_not_called()
 
     def test_live_started_cancelled_ended_and_past_fail_closed(self):
         for flag in ("live", "started", "cancelled", "ended", "completed"):

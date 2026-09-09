@@ -192,11 +192,19 @@ def number(value):
     return result
 
 
-def snapshots(events, games, now):
+def snapshots(events, games, now, window_start=None, window_end=None):
+    window_start = window_start if window_start is not None else now
+    window_end = window_end if window_end is not None else window_start + timedelta(days=7)
     rows = []
-    counts = {"excluded_events": 0, "unmatched_events": 0, "invalid_quotes": 0}
+    counts = {"in_window_events": 0, "excluded_events": 0, "matched_events": 0,
+              "unmatched_events": 0, "invalid_quotes": 0}
     seen = set()
     for event, captured in events:
+        starts = timestamp(event["status"]["startsAt"])
+        if not window_start <= starts <= window_end:
+            counts["excluded_events"] += 1
+            continue
+        counts["in_window_events"] += 1
         if not pregame(event, max(now, captured)):
             counts["excluded_events"] += 1
             continue
@@ -208,6 +216,7 @@ def snapshots(events, games, now):
         if timestamp(game["kickoff"]) <= max(now, captured):
             counts["excluded_events"] += 1
             continue
+        counts["matched_events"] += 1
         for odd_id, (market, selection, line_field) in MARKETS.items():
             odd = event.get("odds", {}).get(odd_id)
             if not odd or any(odd.get(flag) is True for flag in ("started", "ended", "cancelled")) or odd.get("playerID"):
@@ -280,11 +289,11 @@ def main(argv=None):
             events = [(event, now) for event in page["data"]]
         else:
             events = fetch_events(key, now, end, args.max_pages, args.limit)
-        rows, counts = snapshots(events, games, utcnow())
+        rows, counts = snapshots(events, games, utcnow(), window_start=now, window_end=end)
         if not args.dry_run:
             insert_history(url, db_key, rows)
-        print(json.dumps({"dry_run": args.dry_run, "events": len(events),
-                          "rows": len(rows), **counts}))
+        print(json.dumps({"dry_run": args.dry_run, "fetched_events": len(events),
+                          "odds_rows_parsed": len(rows), **counts}))
         # Make matching/data issues visible in Actions rather than silently green.
         return 1 if counts["unmatched_events"] or counts["invalid_quotes"] else 0
     except HTTPError as exc:
