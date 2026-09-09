@@ -1,4 +1,4 @@
-"""Calculate completed-game 2026 NFL team metrics from nflverse PBP."""
+"""Calculate completed-game NFL team metrics from nflverse PBP."""
 
 import argparse
 import csv
@@ -51,7 +51,7 @@ def normalized_week(value):
         return None
     text = str(value).strip()
     try:
-        return str(int(text))
+        return str(int(float(text)))
     except ValueError:
         return None
 
@@ -89,7 +89,7 @@ def latest_completed_week(rows):
     completed = completed_games(rows)
     weeks = sorted(int(week) for week, games in completed.items() if games)
     if not weeks:
-        raise NoCompletedWeek("No completed 2026 games found.")
+        raise NoCompletedWeek("No completed NFL games found.")
     return weeks[-1]
 
 
@@ -121,13 +121,8 @@ def is_kneel_or_spike(row):
     )
 
 
-def calculate(rows, schedule=None, season=SEASON):
-    if schedule is None:
-        through_week = latest_completed_week(rows)
-        completed = {game for week, games in completed_games(rows).items() if int(week) <= through_week for game in games}
-    else:
-        through_week, complete_by_week = schedule_completion(schedule)
-        completed = {game for week, games in complete_by_week.items() if int(week) <= through_week for game in games}
+def _calculate_completed(rows, completed, through_week, season):
+    """Calculate cumulative team metrics using only the supplied completed games."""
     stats = defaultdict(lambda: {"games": set(), "off": [], "def": [], "pass": [], "rush": [], "explosive": 0})
     for row in rows:
         if row.get("game_id") not in completed or not row.get("posteam") or not row.get("defteam"):
@@ -138,10 +133,12 @@ def calculate(rows, schedule=None, season=SEASON):
             continue
         off, deff = stats[row["posteam"]], stats[row["defteam"]]
         off["games"].add(row["game_id"])
-        off["off"].append(epa); deff["def"].append(epa)
+        off["off"].append(epa)
+        deff["def"].append(epa)
         success = binary_flag(row.get("success"))
         if success is not None:
-            off.setdefault("off_success", []).append(success); deff.setdefault("def_success", []).append(success)
+            off.setdefault("off_success", []).append(success)
+            deff.setdefault("def_success", []).append(success)
         if not is_kneel_or_spike(row):
             if binary_flag(row.get("pass")) == 1 or row.get("play_type") in {"pass", "qb_scramble"}:
                 off["pass"].append(epa)
@@ -150,20 +147,59 @@ def calculate(rows, schedule=None, season=SEASON):
         if yards is not None and yards >= 20:
             off["explosive"] += 1
 
-    def avg(values): return float(sum(values, Decimal(0)) / len(values)) if values else None
+    def avg(values):
+        return float(sum(values, Decimal(0)) / len(values)) if values else None
+
     result = []
     for team, s in sorted(stats.items()):
         plays = len(s["off"])
-        result.append({"season": season, "through_week": through_week, "team": team,
-                       "games_played": len(s["games"]), "offense_epa_per_play": avg(s["off"]),
-                       "defense_epa_per_play": avg(s["def"]),
-                       "offense_success_rate": avg(s.get("off_success", [])),
-                       "defense_success_rate": avg(s.get("def_success", [])),
-                       "pass_epa_per_play": avg(s["pass"]), "rush_epa_per_play": avg(s["rush"]),
-                       "explosive_play_rate": s["explosive"] / plays if plays else None})
+        result.append({
+            "season": season,
+            "through_week": through_week,
+            "team": team,
+            "games_played": len(s["games"]),
+            "offense_epa_per_play": avg(s["off"]),
+            "defense_epa_per_play": avg(s["def"]),
+            "offense_success_rate": avg(s.get("off_success", [])),
+            "defense_success_rate": avg(s.get("def_success", [])),
+            "pass_epa_per_play": avg(s["pass"]),
+            "rush_epa_per_play": avg(s["rush"]),
+            "explosive_play_rate": s["explosive"] / plays if plays else None,
+        })
     if not result:
         raise ValueError("No completed team plays found.")
-    return through_week, result
+    return result
+
+
+def calculate(rows, schedule=None, season=SEASON):
+    """Calculate the latest fully completed cumulative weekly snapshot."""
+    if schedule is None:
+        through_week = latest_completed_week(rows)
+        complete_by_week = completed_games(rows)
+    else:
+        through_week, complete_by_week = schedule_completion(schedule)
+    completed = {
+        game
+        for week, games in complete_by_week.items()
+        if int(week) <= through_week
+        for game in games
+    }
+    return through_week, _calculate_completed(rows, completed, through_week, season)
+
+
+def calculate_all_weeks(rows, schedule, season=SEASON):
+    """Build one cumulative snapshot per fully completed regular-season week."""
+    _, complete_by_week = schedule_completion(schedule)
+    output = []
+    for through_week in sorted(map(int, complete_by_week)):
+        completed = {
+            game
+            for week, games in complete_by_week.items()
+            if int(week) <= through_week
+            for game in games
+        }
+        output.extend(_calculate_completed(rows, completed, through_week, season))
+    return output
 
 
 def load_sources(season=SEASON):
@@ -172,8 +208,6 @@ def load_sources(season=SEASON):
         raise RuntimeError("nflreadpy is required to load live NFL data")
     schedule = nfl.load_schedules(season)
     schedule_rows = schedule.to_dicts()
-    # nflreadpy validates the requested season against its current-season data;
-    # avoid the PBP call entirely until the schedule proves a completed week.
     schedule_completion(schedule_rows)
     pbp = nfl.load_pbp(season)
     return pbp.to_dicts(), schedule_rows
@@ -181,10 +215,17 @@ def load_sources(season=SEASON):
 
 def upsert(rows, url, key):
     headers = {"apikey": key, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"}
-    if not key.startswith("sb_secret_"): headers["Authorization"] = f"Bearer {key}"
-    request = Request(f"{url}/rest/v1/team_metrics?on_conflict=season,through_week,team", data=json.dumps(rows, allow_nan=False).encode(), headers=headers, method="POST")
+    if not key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {key}"
+    request = Request(
+        f"{url}/rest/v1/team_metrics?on_conflict=season,through_week,team",
+        data=json.dumps(rows, allow_nan=False).encode(),
+        headers=headers,
+        method="POST",
+    )
     with build_opener(NoRedirect()).open(request, timeout=60) as response:
-        if not 200 <= response.status < 300: raise ValueError("Supabase returned a non-success status.")
+        if not 200 <= response.status < 300:
+            raise ValueError("Supabase returned a non-success status.")
 
 
 def safe_error(exc):
@@ -198,7 +239,7 @@ def safe_error(exc):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--season", type=int, choices=(2025, 2026), default=SEASON)
+    parser.add_argument("--season", type=int, choices=tuple(range(1999, 2027)), default=SEASON)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
@@ -209,7 +250,8 @@ def main(argv=None):
             rows, schedule = load_sources(args.season)
         through_week, metrics = calculate(rows, schedule, args.season)
         if not args.dry_run:
-            url, key = credentials(); upsert(metrics, url, key)
+            url, key = credentials()
+            upsert(metrics, url, key)
         print(json.dumps({"teams_loaded": len(metrics), "through_week": through_week, "dry_run": args.dry_run}))
         return 0
     except NoCompletedWeek:
