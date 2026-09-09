@@ -16,6 +16,16 @@ class DepthChartTests(unittest.TestCase):
         self.assertEqual(output[0]["pos_slot"], 1)
         self.assertEqual(output[0]["pos_rank"], 1)
 
+    def test_season_specific_file_may_omit_season_column(self):
+        rows = [
+            {"dt": "2026-02-01T07:00:00Z", "team": "BUF", "player_name": "QB One", "gsis_id": "a", "pos_slot": 1, "pos_rank": 1},
+            {"dt": "2026-02-02T07:00:00Z", "team": "BUF", "player_name": "QB Two", "gsis_id": "b", "pos_slot": 1, "pos_rank": 1},
+        ]
+        dt, output = m.latest_rows(rows, 2025)
+        self.assertEqual(dt, "2026-02-02T07:00:00Z")
+        self.assertEqual(output[0]["season"], 2025)
+        self.assertEqual(output[0]["player_name"], "QB Two")
+
     def test_requires_timestamped_rows(self):
         with self.assertRaisesRegex(ValueError, "No timestamped depth chart"):
             m.latest_rows([{"season": 2026, "team": "BUF", "player_name": "QB"}], 2026)
