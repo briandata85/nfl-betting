@@ -94,13 +94,13 @@ def calculate(rows, season=SEASON, through_week=THROUGH_WEEK):
     return output
 
 
-def load_rows():
+def load_rows(season=SEASON):
     if nfl is None:
         raise RuntimeError("nflreadpy is required to load live player data")
     try:
-        return nfl.load_player_stats(SEASON, summary_level="reg").to_dicts()
+        return nfl.load_player_stats(season, summary_level="reg").to_dicts()
     except Exception as exc:
-        raise RuntimeError("nflreadpy.load_player_stats(2025, summary_level='reg') failed: " + safe_error(exc)) from exc
+        raise RuntimeError(f"nflreadpy.load_player_stats({season}, summary_level='reg') failed: " + safe_error(exc)) from exc
 
 
 def upsert(rows, url, key):
@@ -129,15 +129,16 @@ def safe_error(exc):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--season", type=int, choices=(2025, 2026), default=SEASON)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
     try:
-        rows = json.loads(args.json.read_text(encoding="utf-8")) if args.json else load_rows()
-        metrics = calculate(rows)
+        rows = json.loads(args.json.read_text(encoding="utf-8")) if args.json else load_rows(args.season)
+        metrics = calculate(rows, season=args.season)
         if not args.dry_run:
             url, key = credentials(); delete_season(url, key); upsert(metrics, url, key)
-        print(json.dumps({"players_loaded": len(metrics), "season": SEASON, "through_week": THROUGH_WEEK, "dry_run": args.dry_run}))
+        print(json.dumps({"players_loaded": len(metrics), "season": args.season, "through_week": THROUGH_WEEK, "dry_run": args.dry_run}))
         return 0
     except Exception as exc:
         print(f"Player metrics load failed: {safe_error(exc)}")
