@@ -138,6 +138,58 @@ class CollectorTests(unittest.TestCase):
             c.fetch_events("key", NOW, NOW)
 
     @patch.object(c, "request_json")
+    def test_provider_http_error_reports_json_without_retry(self, request):
+        error = HTTPError("https://private.example", 403, "private reason", {},
+                          io.BytesIO(b'{"success":false,"error":"Plan does not allow NFL odds"}'))
+        request.side_effect = error
+        with redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(HTTPError) as raised:
+                c.fetch_events("private-key", NOW, NOW)
+        self.assertIs(raised.exception, error)
+        request.assert_called_once()
+        self.assertIn('SportsGameOdds HTTP 403: {"error": "Plan does not allow NFL odds"}', output.getvalue())
+        self.assertNotIn("private", output.getvalue())
+
+    @patch.dict(c.os.environ, {"SUPABASE_SECRET_KEY": "db-secret"})
+    def test_provider_error_redacts_secrets_and_omits_headers(self):
+        body = {"error": {"message": "Denied token a/b and a%2Fb and db-secret\n::warning::echo"},
+                "headers": {"x-api-key": "a/b", "custom": "hidden-header"},
+                "request": {"headers": {"custom": "hidden-header"}}}
+        error = HTTPError("url", 403, "", {}, io.BytesIO(json.dumps(body).encode()))
+        with redirect_stderr(io.StringIO()) as output:
+            c.report_provider_error(error, "a/b")
+        log = output.getvalue()
+        for secret in ("a/b", "a%2Fb", "db-secret", "hidden-header", "x-api-key"):
+            self.assertNotIn(secret, log)
+        self.assertIn("[REDACTED]", log)
+        self.assertEqual(len(log.splitlines()), 1)
+        error = HTTPError("url", 403, "", {},
+                          io.BytesIO(b'{"error":"Request headers: custom=hidden-header"}'))
+        with redirect_stderr(io.StringIO()) as output:
+            c.report_provider_error(error, "a/b")
+        self.assertNotIn("hidden-header", output.getvalue())
+
+    def test_provider_error_non_json_empty_and_oversized_bodies_are_omitted(self):
+        for body in (b"", b"<html>private</html>", b'{"error":"' + b'x' * 17000 + b'"}'):
+            with self.subTest(body_length=len(body)):
+                error = HTTPError("url", 403, "private", {}, io.BytesIO(body))
+                with redirect_stderr(io.StringIO()) as output:
+                    c.report_provider_error(error, "key")
+                self.assertIn("body omitted", output.getvalue())
+                self.assertNotIn("private", output.getvalue())
+
+    @patch.object(c, "request_json")
+    @patch.object(c, "report_provider_error")
+    def test_cursor_end_and_supabase_errors_do_not_log_provider_body(self, report, request):
+        request.side_effect = [{"success": True, "data": [], "nextCursor": "abc"},
+                               HTTPError("url", 404, "", {}, None)]
+        self.assertEqual(c.fetch_events("key", NOW, NOW), [])
+        request.side_effect = HTTPError("url", 403, "", {}, None)
+        with self.assertRaises(HTTPError):
+            c.fetch_games("https://db.example", "key", NOW, NOW)
+        report.assert_not_called()
+
+    @patch.object(c, "request_json")
     def test_append_only_write_contract(self, request):
         rows, _ = c.snapshots([(event(), NOW)], [game()], NOW)
         c.insert_history("https://db.example", "sb_secret_test", rows)

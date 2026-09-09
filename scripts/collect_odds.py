@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import os
+import re
 from pathlib import Path
 import sys
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, quote_plus, urlencode
 from urllib.request import Request, build_opener
 
 try:
@@ -85,6 +86,40 @@ def fetch_games(url, key, start, end):
         games.extend(page)
 
 
+def report_provider_error(exc, key):
+    """Log only JSON error/message fields, never headers or raw responses."""
+    fallback = "JSON error message unavailable (body omitted)."
+    try:
+        body = exc.read(16385)
+        if len(body) > 16384:
+            raise ValueError("Oversized error body")
+        data = json.loads(body)
+        # Allowlist message fields; reflected request/headers metadata is omitted.
+        def messages(value):
+            if isinstance(value, str):
+                # A provider may echo request headers inside its message.
+                if re.search(r"headers?|authorization|x-api-key|apikey", value, re.I):
+                    return "[REDACTED header-containing message]"
+                secrets = [key] + [os.environ.get(name, "").strip() for name in (
+                    "SPORTSGAMEODDS_API_KEY", "SUPABASE_SECRET_KEY", "SUPABASE_URL")]
+                for secret in sorted(set(secrets), key=len, reverse=True):
+                    if secret:
+                        for variant in (secret, quote(secret, safe=""), quote_plus(secret)):
+                            value = value.replace(variant, "[REDACTED]")
+                return value
+            if isinstance(value, dict):
+                return {field: messages(value[field]) for field in ("error", "message")
+                        if field in value}
+            return None
+
+        safe = messages(data) if isinstance(data, dict) else None
+        detail = json.dumps(safe, ensure_ascii=True) if safe else fallback
+    except Exception:
+        detail = fallback
+    # JSON escaping keeps untrusted newlines/control characters on one log line.
+    print(f"SportsGameOdds HTTP {exc.code}: {detail}", file=sys.stderr)
+
+
 def fetch_events(key, start, end, max_pages=4, limit=100):
     params = {"leagueID": "NFL", "oddsAvailable": "true", "started": "false",
               "live": "false", "ended": "false", "cancelled": "false",
@@ -104,6 +139,7 @@ def fetch_events(key, start, end, max_pages=4, limit=100):
         except HTTPError as exc:
             if exc.code == 404 and cursor:
                 return events
+            report_provider_error(exc, key)
             raise
         captured = utcnow()
         if not isinstance(page, dict) or page.get("success") is not True or not isinstance(page.get("data"), list):
