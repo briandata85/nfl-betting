@@ -19,6 +19,7 @@ except ImportError:
 
 SEASON = 2025
 THROUGH_WEEK = 18
+ALLOWED_POSITIONS = {"QB", "RB", "WR", "TE"}
 SUM_FIELDS = ("games_played", "passing_epa", "carries", "rushing_yards", "rushing_epa",
               "targets", "receptions", "receiving_yards", "receiving_epa")
 FIELDS = ("season", "through_week", "player_id", "player_name", "team", "position",
@@ -44,6 +45,8 @@ def regular_rows(rows):
     for row in rows:
         season_type = str(value(row, "season_type", "season_type_id", default="REG")).upper()
         if season_type not in {"REG", "REGULAR", "REGULAR_SEASON"}:
+            continue
+        if str(value(row, "position", default="")).upper() not in ALLOWED_POSITIONS:
             continue
         week_value = value(row, "week")
         week = int(number(week_value)) if week_value not in (None, "") else None
@@ -108,6 +111,15 @@ def upsert(rows, url, key):
         if not 200 <= response.status < 300: raise ValueError("Supabase returned a non-success status.")
 
 
+def delete_season(url, key, season=SEASON):
+    """Replace only the selected season; snapshots for other seasons remain."""
+    headers = {"apikey": key}
+    if not key.startswith("sb_secret_"): headers["Authorization"] = f"Bearer {key}"
+    request = Request(f"{url}/rest/v1/player_metrics?season=eq.{season}", headers=headers, method="DELETE")
+    with build_opener(NoRedirect()).open(request, timeout=60) as response:
+        if not 200 <= response.status < 300: raise ValueError("Supabase season cleanup failed.")
+
+
 def safe_error(exc):
     message = str(exc) or exc.__class__.__name__
     for secret in (os.environ.get("SUPABASE_URL", ""), os.environ.get("SUPABASE_SECRET_KEY", "")):
@@ -124,7 +136,7 @@ def main(argv=None):
         rows = json.loads(args.json.read_text(encoding="utf-8")) if args.json else load_rows()
         metrics = calculate(rows)
         if not args.dry_run:
-            url, key = credentials(); upsert(metrics, url, key)
+            url, key = credentials(); delete_season(url, key); upsert(metrics, url, key)
         print(json.dumps({"players_loaded": len(metrics), "season": SEASON, "through_week": THROUGH_WEEK, "dry_run": args.dry_run}))
         return 0
     except Exception as exc:

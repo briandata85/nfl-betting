@@ -38,6 +38,19 @@ class PlayerMetricsTests(unittest.TestCase):
         self.assertEqual(one["cpoe"], 6.0)
         self.assertTrue(all(row["through_week"] == 18 for row in rows))
 
+    def test_only_skill_positions_are_loaded(self):
+        rows = m.calculate(ROWS + [{**ROWS[0], "player_id": "k1", "position": "K"}])
+        self.assertEqual({row["position"] for row in rows}, {"WR", "RB"})
+
+    @patch.object(m, "build_opener")
+    def test_delete_is_scoped_to_2025(self, opener):
+        response = opener.return_value.open.return_value.__enter__.return_value
+        response.status = 204
+        m.delete_season("https://db.example", "key")
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.full_url, "https://db.example/rest/v1/player_metrics?season=eq.2025")
+        self.assertEqual(request.get_method(), "DELETE")
+
     @patch.object(m, "upsert")
     @patch.object(m, "load_rows", return_value=ROWS)
     def test_dry_run_does_not_write(self, load, upsert):
