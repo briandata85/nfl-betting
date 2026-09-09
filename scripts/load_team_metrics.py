@@ -2,7 +2,6 @@
 
 import argparse
 import csv
-import gzip
 import io
 import json
 import os
@@ -12,12 +11,16 @@ from pathlib import Path
 from urllib.request import Request, build_opener
 
 try:
+    import nflreadpy as nfl
+except ModuleNotFoundError:  # Allows offline fixture tests before dependencies install.
+    nfl = None
+
+try:
     from .load_schedule import NoRedirect, credentials
 except ImportError:
     from load_schedule import NoRedirect, credentials
 
 SEASON = 2026
-PBP_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_2026.csv.gz"
 METRIC_FIELDS = (
     "games_played", "offense_epa_per_play", "defense_epa_per_play",
     "offense_success_rate", "defense_success_rate", "pass_epa_per_play",
@@ -47,6 +50,22 @@ def completed_games(rows):
     return games
 
 
+def schedule_completion(schedule):
+    regular = [row for row in schedule if str(row.get("game_type", "REG")).upper() == "REG"]
+    by_week = defaultdict(list)
+    for row in regular:
+        week = str(row.get("week", ""))
+        if week.isdigit():
+            by_week[week].append(row)
+    complete = {}
+    for week, games in by_week.items():
+        if games and all(str(row.get("result", "") or "").strip() for row in games):
+            complete[week] = {row.get("game_id") for row in games if row.get("game_id")}
+    if not complete:
+        raise NoCompletedWeek("No completed schedule week found.")
+    return max(map(int, complete)), complete
+
+
 def latest_completed_week(rows):
     completed = completed_games(rows)
     weeks = sorted(int(week) for week, games in completed.items() if games and week.isdigit())
@@ -67,9 +86,13 @@ def is_kneel_or_spike(row):
     return row.get("qb_kneel") == "1" or row.get("qb_spike") == "1" or row.get("play_type") in {"qb_kneel", "qb_spike"}
 
 
-def calculate(rows):
-    through_week = latest_completed_week(rows)
-    completed = {game for week, games in completed_games(rows).items() if week.isdigit() and int(week) <= through_week for game in games}
+def calculate(rows, schedule=None):
+    if schedule is None:
+        through_week = latest_completed_week(rows)
+        completed = {game for week, games in completed_games(rows).items() if week.isdigit() and int(week) <= through_week for game in games}
+    else:
+        through_week, complete_by_week = schedule_completion(schedule)
+        completed = {game for week, games in complete_by_week.items() if int(week) <= through_week for game in games}
     stats = defaultdict(lambda: {"games": set(), "off": [], "def": [], "pass": [], "rush": [], "explosive": 0})
     for row in rows:
         if row.get("game_id") not in completed or not row.get("posteam") or not row.get("defteam"):
@@ -108,9 +131,13 @@ def calculate(rows):
     return through_week, result
 
 
-def fetch_pbp():
-    with build_opener(NoRedirect()).open(Request(PBP_URL), timeout=120) as response:
-        return gzip.decompress(response.read()).decode("utf-8-sig")
+def load_sources():
+    """Load official nflreadpy Polars frames and convert them to plain rows."""
+    if nfl is None:
+        raise RuntimeError("nflreadpy is required to load live NFL data")
+    pbp = nfl.load_pbp(SEASON)
+    schedule = nfl.load_schedules(SEASON)
+    return pbp.to_dicts(), schedule.to_dicts()
 
 
 def upsert(rows, url, key):
@@ -136,9 +163,11 @@ def main(argv=None):
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.csv: text = args.csv.read_text(encoding="utf-8-sig")
-        else: text = fetch_pbp()
-        through_week, metrics = calculate(rows_from_text(text))
+        if args.csv:
+            rows, schedule = rows_from_text(args.csv.read_text(encoding="utf-8-sig")), None
+        else:
+            rows, schedule = load_sources()
+        through_week, metrics = calculate(rows, schedule)
         if not args.dry_run:
             url, key = credentials(); upsert(metrics, url, key)
         print(json.dumps({"teams_loaded": len(metrics), "through_week": through_week, "dry_run": args.dry_run}))
