@@ -45,8 +45,9 @@ def regular_rows(rows):
         season_type = str(value(row, "season_type", "season_type_id", default="REG")).upper()
         if season_type not in {"REG", "REGULAR", "REGULAR_SEASON"}:
             continue
-        week = int(number(value(row, "week", default=0)))
-        if 1 <= week <= THROUGH_WEEK:
+        week_value = value(row, "week")
+        week = int(number(week_value)) if week_value not in (None, "") else None
+        if week is None or 1 <= week <= THROUGH_WEEK:
             result.append(row)
     return result
 
@@ -63,12 +64,14 @@ def calculate(rows, season=SEASON, through_week=THROUGH_WEEK):
                                     {"cpoe_sum": 0.0, "cpoe_count": 0,
                                      "player_name": value(row, "player_name", "name", default=""),
                                      "position": value(row, "position", default=""), "weeks": set()})
-        item["weeks"].add(value(row, "week"))
+        item["weeks"].add(value(row, "week", default="aggregate"))
         for field in SUM_FIELDS:
             aliases = {"games_played": ("games", "games_played"), "rushing_yards": ("rushing_yards", "rushing_yards_total"),
                        "receiving_yards": ("receiving_yards", "receiving_yards_total")}.get(field, (field,))
-            item[field] += number(value(row, *aliases))
-        cpoe = value(row, "cpoe")
+            raw = value(row, *aliases)
+            # A reg-level row is already aggregated; games is a source total or 1.
+            item[field] += number(raw, default=1.0 if field == "games_played" else 0.0)
+        cpoe = value(row, "passing_cpoe", "cpoe")
         if cpoe not in (None, ""):
             item["cpoe_sum"] += number(cpoe); item["cpoe_count"] += 1
     team_totals = defaultdict(lambda: {"targets": 0.0, "carries": 0.0})
@@ -91,7 +94,10 @@ def calculate(rows, season=SEASON, through_week=THROUGH_WEEK):
 def load_rows():
     if nfl is None:
         raise RuntimeError("nflreadpy is required to load live player data")
-    return nfl.load_player_stats(SEASON, summary_level="week").to_dicts()
+    try:
+        return nfl.load_player_stats(SEASON, summary_level="reg").to_dicts()
+    except Exception as exc:
+        raise RuntimeError("nflreadpy.load_player_stats(2025, summary_level='reg') failed: " + safe_error(exc)) from exc
 
 
 def upsert(rows, url, key):
