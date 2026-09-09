@@ -25,7 +25,9 @@ FIELDS = {
 
 
 def nullable(value):
-    value = str(value or "").strip()
+    if value is None:
+        return None
+    value = str(value).strip()
     return None if value.upper() in {"", "NA", "N/A", "NULL", "NAN", "TBD"} else value
 
 
