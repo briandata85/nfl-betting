@@ -107,15 +107,15 @@ class CollectorTests(unittest.TestCase):
     def test_pagination_filters_and_deduplication(self, request, clock):
         request.side_effect = [{"success": True, "data": [event()], "nextCursor": "abc"},
                                {"success": True, "data": [event()]}]
-        result = c.fetch_events("secret", NOW, NOW + timedelta(days=7))
+        result = c.fetch_events("secret/+&= value", NOW, NOW + timedelta(days=7))
         self.assertEqual(len(result), 1)
         query = parse_qs(urlsplit(request.call_args_list[0].args[0]).query)
         self.assertEqual(query["leagueID"], ["NFL"])
         self.assertEqual(query["started"], ["false"])
         self.assertEqual(query["includeAltLines"], ["false"])
         self.assertEqual(set(query["oddID"][0].split(",")), set(c.MARKETS))
-        self.assertNotIn("secret", request.call_args_list[0].args[0])
-        self.assertEqual(request.call_args_list[0].args[1], {"x-api-key": "secret"})
+        self.assertEqual(query["apiKey"], ["secret/+&= value"])
+        self.assertTrue(all(call.args[1] == {} for call in request.call_args_list))
         next_query = parse_qs(urlsplit(request.call_args_list[1].args[0]).query)
         self.assertEqual(next_query.pop("cursor"), ["abc"])
         self.assertEqual(query, next_query)
@@ -149,6 +149,25 @@ class CollectorTests(unittest.TestCase):
         request.assert_called_once()
         self.assertIn('SportsGameOdds HTTP 403: {"error": "Plan does not allow NFL odds"}', output.getvalue())
         self.assertNotIn("private", output.getvalue())
+
+    @patch.dict(c.os.environ, {"SPORTSGAMEODDS_API_KEY": "private/+&= token"})
+    @patch.object(c, "credentials", return_value=("https://db.example", "db-key"))
+    @patch.object(c, "fetch_games", return_value=[game()])
+    @patch.object(c, "request_json")
+    def test_query_auth_http_error_does_not_expose_url_or_key(self, request, games, credentials):
+        def forbidden(url, headers):
+            body = json.dumps({"error": "Access denied for " + url}).encode()
+            raise HTTPError(url, 403, url, {}, io.BytesIO(body))
+
+        request.side_effect = forbidden
+        with redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(c.main(["--dry-run"]), 1)
+        log = output.getvalue()
+        self.assertIn("SportsGameOdds HTTP 403", log)
+        self.assertIn("Collector failed (HTTP 403)", log)
+        for sensitive in ("private", "apiKey=", c.EVENTS_URL, "Traceback"):
+            self.assertNotIn(sensitive, log)
+        request.assert_called_once()
 
     @patch.dict(c.os.environ, {"SUPABASE_SECRET_KEY": "db-secret"})
     def test_provider_error_redacts_secrets_and_omits_headers(self):

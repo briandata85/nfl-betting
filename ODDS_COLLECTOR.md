@@ -27,7 +27,8 @@ Official references:
 - https://sportsgameodds.com/docs/guides/data-batches
 - https://sportsgameodds.com/docs/basics/quickstart
 
-GET `https://api.sportsgameodds.com/v2/events` authenticates with `x-api-key`.
+GET `https://api.sportsgameodds.com/v2/events` authenticates with the `apiKey`
+query parameter, populated from `SPORTSGAMEODDS_API_KEY`. Request URLs are never logged.
 The response has `success`, `data` (events), and optional `nextCursor`. Pass the
 cursor unchanged on the next otherwise-identical query. A cursor-page 404 means
 end of results; other HTTP errors fail without automatic retries.

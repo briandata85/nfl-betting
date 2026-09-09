@@ -121,7 +121,7 @@ def report_provider_error(exc, key):
 
 
 def fetch_events(key, start, end, max_pages=4, limit=100):
-    params = {"leagueID": "NFL", "oddsAvailable": "true", "started": "false",
+    params = {"apiKey": key, "leagueID": "NFL", "oddsAvailable": "true", "started": "false",
               "live": "false", "ended": "false", "cancelled": "false",
               "oddID": ",".join(MARKETS), "includeAltLines": "false",
               "includeOpposingOdds": "false", "startsAfter": start.isoformat(),
@@ -135,7 +135,7 @@ def fetch_events(key, start, end, max_pages=4, limit=100):
         if cursor:
             query["cursor"] = cursor
         try:
-            page = request_json(f"{EVENTS_URL}?{urlencode(query)}", {"x-api-key": key})
+            page = request_json(f"{EVENTS_URL}?{urlencode(query)}", {})
         except HTTPError as exc:
             if exc.code == 404 and cursor:
                 return events
