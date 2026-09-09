@@ -1,5 +1,11 @@
 # NFL betting data
 
+## Collect pregame NFL odds
+
+See [ODDS_COLLECTOR.md](ODDS_COLLECTOR.md) for the SportsGameOdds v2 collector,
+environment secrets, append-only history mapping, and manual **Collect NFL Odds**
+workflow. Only full-game spreads, moneylines, and totals are collected.
+
 ## Load the 2026 schedule
 
 The loader downloads the CSV from the current nflverse schedules release:
