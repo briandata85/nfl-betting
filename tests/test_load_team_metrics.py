@@ -11,6 +11,18 @@ CSV = """season,week,game_id,result,posteam,defteam,epa,success,pass,rush,play_t
 """
 
 class MetricsTests(unittest.TestCase):
+    def test_live_load_checks_schedule_before_pbp(self):
+        class Frame:
+            def __init__(self, rows): self.rows = rows
+            def to_dicts(self): return self.rows
+        fake = type("Nfl", (), {})()
+        fake.load_schedules = lambda season: Frame([{
+            "game_id": "g1", "week": 1, "game_type": "REG", "result": None}])
+        fake.load_pbp = lambda season: self.fail("load_pbp must not run before a completed week")
+        with patch.object(m, "nfl", fake):
+            with self.assertRaises(m.NoCompletedWeek):
+                m.load_sources()
+
     def test_schedule_requires_every_regular_game_to_have_result(self):
         schedule = [
             {"game_id": "g1", "week": 1, "game_type": "REG", "result": 3},

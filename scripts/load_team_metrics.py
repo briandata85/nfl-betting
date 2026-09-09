@@ -135,9 +135,13 @@ def load_sources():
     """Load official nflreadpy Polars frames and convert them to plain rows."""
     if nfl is None:
         raise RuntimeError("nflreadpy is required to load live NFL data")
-    pbp = nfl.load_pbp(SEASON)
     schedule = nfl.load_schedules(SEASON)
-    return pbp.to_dicts(), schedule.to_dicts()
+    schedule_rows = schedule.to_dicts()
+    # nflreadpy validates the requested season against its current-season data;
+    # avoid the PBP call entirely until the schedule proves a completed week.
+    schedule_completion(schedule_rows)
+    pbp = nfl.load_pbp(SEASON)
+    return pbp.to_dicts(), schedule_rows
 
 
 def upsert(rows, url, key):
