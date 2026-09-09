@@ -9,6 +9,9 @@ on:
         type: choice
         options: ['2025', '2026']
         default: '2026'
+  schedule:
+    # GitHub Actions cron is UTC: every Tuesday at 11:00 UTC.
+    - cron: '0 11 * * 2'
 
 permissions:
   contents: read
@@ -27,4 +30,5 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: python scripts/load_team_metrics.py --season "${{ inputs.season }}"
+          SEASON: ${{ github.event_name == 'schedule' && '2026' || inputs.season }}
+        run: python scripts/load_team_metrics.py --season "$SEASON"
