@@ -93,6 +93,22 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(bbb["offense_success_rate"], 0.0)
         self.assertEqual(bbb["defense_success_rate"], 1.0)
 
+    def test_all_week_snapshots_do_not_use_future_games(self):
+        rows = m.rows_from_text(CSV)
+        schedule = [
+            {"game_id": "g1", "week": 1, "game_type": "REG", "result": 3},
+            {"game_id": "g2", "week": 2, "game_type": "REG", "result": 7},
+            {"game_id": "g3", "week": 3, "game_type": "REG", "result": None},
+        ]
+        snapshots = m.calculate_all_weeks(rows, schedule, 2026)
+        self.assertEqual({row["through_week"] for row in snapshots}, {1, 2})
+        week1_aaa = next(row for row in snapshots if row["through_week"] == 1 and row["team"] == "AAA")
+        week2_aaa = next(row for row in snapshots if row["through_week"] == 2 and row["team"] == "AAA")
+        self.assertEqual(week1_aaa["games_played"], 1)
+        self.assertEqual(week1_aaa["offense_epa_per_play"], 1.0)
+        self.assertEqual(week2_aaa["games_played"], 2)
+        self.assertEqual(week2_aaa["offense_epa_per_play"], 1.5)
+
     def test_season_parameter_controls_filter_and_upsert_rows(self):
         rows = m.rows_from_text(CSV.replace("2026", "2025"), 2025)
         _, metrics = m.calculate(rows, None, 2025)
