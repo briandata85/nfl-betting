@@ -1,0 +1,30 @@
+name: Test Supabase Connection
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Supabase connection
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          if [[ -z "$SUPABASE_URL" || -z "$SUPABASE_SECRET_KEY" ]]; then
+            echo "Required Supabase secrets are missing."
+            exit 1
+          fi
+
+          if ! curl --fail --silent --output /dev/null \
+            --connect-timeout 10 --max-time 30 \
+            --header "apikey: ${SUPABASE_SECRET_KEY}" \
+            "${SUPABASE_URL%/}/rest/v1/games?select=game_id&limit=1"; then
+            echo "Supabase connection test failed."
+            exit 1
+          fi
+
+          echo "Supabase connection test passed."
