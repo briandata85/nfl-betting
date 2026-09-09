@@ -19,6 +19,7 @@ class InjuryTests(unittest.TestCase):
         by_team = {t: g["game_id"] for g in game_rows for t in (g["home_team"], g["away_team"])}
         self.assertEqual(by_team[rows[0]["team"]], "g1")
 
+
     @patch.object(m, "build_opener")
     def test_supabase_insert_reports_safe_http_body(self, opener):
         error = HTTPError("https://db.example", 400, "bad", {}, io.BytesIO(

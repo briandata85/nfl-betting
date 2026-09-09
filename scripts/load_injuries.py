@@ -1,7 +1,7 @@
 """Append an NFL.com injury-report snapshot to Supabase."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -88,6 +88,24 @@ def games(url, key, season, week):
     return get_json(f"{url}/rest/v1/games?{query}", headers)
 
 
+def current_week(url, key, season):
+    query = urlencode({"select": "week,kickoff", "season": f"eq.{season}", "order": "kickoff"})
+    headers = {"apikey": key}
+    if not key.startswith("sb_secret_"): headers["Authorization"] = f"Bearer {key}"
+    rows = get_json(f"{url}/rest/v1/games?{query}", headers)
+    now = datetime.now(timezone.utc)
+    candidates = []
+    for row in rows:
+        try:
+            kickoff = datetime.fromisoformat(str(row["kickoff"]).replace("Z", "+00:00"))
+            if kickoff.tzinfo is None: kickoff = kickoff.replace(tzinfo=timezone.utc)
+            if kickoff >= now - timedelta(days=7): candidates.append((kickoff, int(row["week"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not candidates: raise ValueError("No current NFL week found in Supabase games")
+    return min(candidates, key=lambda item: item[0])[1]
+
+
 def insert(url, key, rows):
     if not rows: return
     headers = {"apikey": key, "Content-Type":"application/json", "Prefer":"return=minimal"}
@@ -108,14 +126,19 @@ def insert(url, key, rows):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--season", type=int, default=2026); parser.add_argument("--week", type=int, default=1)
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--season", type=int, default=2026); parser.add_argument("--week", type=int); parser.add_argument("--auto-week", action="store_true")
     args = parser.parse_args(argv)
     try:
         url, key = credentials()
+        if args.auto_week: args.week = current_week(url, key, args.season)
+        if args.week is None: parser.error("--week is required unless --auto-week is used")
         html = get_json("data:application/json,{}", {}) if False else None
         request = Request(NFL_URL.format(season=args.season, week=args.week), headers={"User-Agent":"nfl-betting injury loader"})
         with build_opener(NoRedirect()).open(request, timeout=60) as response: html = response.read().decode("utf-8", "replace")
         records, found = parse_report(html)
+        if not records:
+            print(f"NFL.com has not posted a player injury report for {args.season} Week {args.week} yet. Nothing to load.")
+            return 0
         if not records and "Practice Status" in html:
             raise ValueError("NFL.com page contains Practice Status but no injury rows were parsed")
         game_rows = games(url, key, args.season, args.week)
