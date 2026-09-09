@@ -73,6 +73,20 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(aaa["pass_epa_per_play"], 1.5)
         self.assertIsNone(aaa["rush_epa_per_play"])
 
+    def test_success_parses_numeric_and_boolean_values(self):
+        rows = [
+            {"season": 2026, "week": 1, "game_id": "g1", "result": 3, "posteam": "AAA", "defteam": "BBB", "epa": 1.0, "success": 1.0, "pass": 1, "rush": 0, "play_type": "pass", "yards_gained": 8},
+            {"season": 2026, "week": 1, "game_id": "g1", "result": 3, "posteam": "BBB", "defteam": "AAA", "epa": -1.0, "success": False, "pass": 0, "rush": 1, "play_type": "run", "yards_gained": 2},
+        ]
+        through, metrics = m.calculate(rows)
+        self.assertEqual(through, 1)
+        aaa = next(row for row in metrics if row["team"] == "AAA")
+        bbb = next(row for row in metrics if row["team"] == "BBB")
+        self.assertEqual(aaa["offense_success_rate"], 1.0)
+        self.assertEqual(aaa["defense_success_rate"], 0.0)
+        self.assertEqual(bbb["offense_success_rate"], 0.0)
+        self.assertEqual(bbb["defense_success_rate"], 1.0)
+
     def test_season_parameter_controls_filter_and_upsert_rows(self):
         rows = m.rows_from_text(CSV.replace("2026", "2025"), 2025)
         _, metrics = m.calculate(rows, None, 2025)

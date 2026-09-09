@@ -82,6 +82,18 @@ def num(value):
         return None
 
 
+def binary_flag(value):
+    """Normalize nflverse 0/1 success values from CSV or Polars rows."""
+    if isinstance(value, bool):
+        return int(value)
+    parsed = num(value)
+    if parsed == Decimal(0):
+        return 0
+    if parsed == Decimal(1):
+        return 1
+    return None
+
+
 def is_kneel_or_spike(row):
     return row.get("qb_kneel") == "1" or row.get("qb_spike") == "1" or row.get("play_type") in {"qb_kneel", "qb_spike"}
 
@@ -104,13 +116,13 @@ def calculate(rows, schedule=None, season=SEASON):
         off, deff = stats[row["posteam"]], stats[row["defteam"]]
         off["games"].add(row["game_id"])
         off["off"].append(epa); deff["def"].append(epa)
-        success = row.get("success")
-        if success in {"0", "1"}:
-            off.setdefault("off_success", []).append(int(success)); deff.setdefault("def_success", []).append(int(success))
+        success = binary_flag(row.get("success"))
+        if success is not None:
+            off.setdefault("off_success", []).append(success); deff.setdefault("def_success", []).append(success)
         if not is_kneel_or_spike(row):
-            if row.get("pass") == "1" or row.get("play_type") in {"pass", "qb_scramble"}:
+            if row.get("pass") == "1" or row.get("pass") == 1 or row.get("play_type") in {"pass", "qb_scramble"}:
                 off["pass"].append(epa)
-            if row.get("rush") == "1" or row.get("play_type") == "run":
+            if row.get("rush") == "1" or row.get("rush") == 1 or row.get("play_type") == "run":
                 off["rush"].append(epa)
         if yards is not None and yards >= 20:
             off["explosive"] += 1
