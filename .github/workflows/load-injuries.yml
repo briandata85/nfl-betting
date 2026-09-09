@@ -12,9 +12,12 @@ on:
         required: true
         default: '1'
   schedule:
-    # GitHub cron is UTC: Wed/Thu/Fri 6:30 PM ET and Sat 11:00 AM ET in EDT.
+    # Run both UTC possibilities, then gate by the live America/New_York offset.
+    # Desired ET times: Wed/Thu/Fri 6:30 PM and Sat 11:00 AM.
     - cron: '30 22 * * 3-5'
+    - cron: '30 23 * * 3-5'
     - cron: '0 15 * * 6'
+    - cron: '0 16 * * 6'
 
 permissions:
   contents: read
@@ -23,11 +26,35 @@ jobs:
   load-injuries:
     runs-on: ubuntu-latest
     steps:
+      - name: Check Eastern schedule
+        id: eastern
+        if: github.event_name == 'schedule'
+        env:
+          TRIGGER_CRON: ${{ github.event.schedule }}
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          import os
+
+          offset = int(datetime.now(ZoneInfo("America/New_York")).utcoffset().total_seconds() // 3600)
+          cron = os.environ["TRIGGER_CRON"]
+          edt = {"30 22 * * 3-5", "0 15 * * 6"}
+          est = {"30 23 * * 3-5", "0 16 * * 6"}
+          should_run = cron in (edt if offset == -4 else est if offset == -5 else set())
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"run={'true' if should_run else 'false'}\n")
+          print(f"Eastern UTC offset: {offset}; trigger: {cron}; run: {should_run}")
+          PY
       - uses: actions/checkout@v4
+        if: github.event_name != 'schedule' || steps.eastern.outputs.run == 'true'
       - uses: actions/setup-python@v5
+        if: github.event_name != 'schedule' || steps.eastern.outputs.run == 'true'
         with: {python-version: '3.12'}
-      - run: python -m unittest discover -s tests -v
+      - if: github.event_name != 'schedule' || steps.eastern.outputs.run == 'true'
+        run: python -m unittest discover -s tests -v
       - name: Load NFL.com injury snapshot
+        if: github.event_name != 'schedule' || steps.eastern.outputs.run == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
