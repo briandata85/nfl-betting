@@ -106,11 +106,11 @@ def current_week(url, key, season):
     return min(candidates, key=lambda item: item[0])[1]
 
 
-def insert(url, key, rows):
+def post_rows(url, key, table, rows):
     if not rows: return
     headers = {"apikey": key, "Content-Type":"application/json", "Prefer":"return=minimal"}
     if not key.startswith("sb_secret_"): headers["Authorization"] = f"Bearer {key}"
-    request = Request(f"{url}/rest/v1/injury_history", data=json.dumps(rows).encode(), headers=headers, method="POST")
+    request = Request(f"{url}/rest/v1/{table}", data=json.dumps(rows).encode(), headers=headers, method="POST")
     try:
         with build_opener(NoRedirect()).open(request, timeout=60) as response:
             if not 200 <= response.status < 300: raise ValueError("Supabase insert failed")
@@ -125,6 +125,31 @@ def insert(url, key, rows):
         raise RuntimeError(f"Supabase HTTP {exc.code}: {detail}") from exc
 
 
+def insert(url, key, rows):
+    post_rows(url, key, "injury_history", rows)
+
+
+def insert_report_status(url, key, rows):
+    post_rows(url, key, "injury_report_status", rows)
+
+
+def build_report_status(records, found, game_rows, season, week, captured):
+    by_team = {t: g["game_id"] for g in game_rows for t in (g.get("home_team"), g.get("away_team"))}
+    counts = {team: 0 for team in found}
+    for record in records:
+        counts[record["team"]] = counts.get(record["team"], 0) + 1
+    return [{
+        "season": season,
+        "week": week,
+        "game_id": by_team.get(team),
+        "team": team,
+        "players_reported": counts.get(team, 0),
+        "report_status": "players_reported" if counts.get(team, 0) else "no_injuries_reported",
+        "captured_at": captured,
+        "source": "nfl.com",
+    } for team in sorted(found) if team in by_team]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--season", type=int, default=2026); parser.add_argument("--week", type=int); parser.add_argument("--auto-week", action="store_true")
     args = parser.parse_args(argv)
@@ -132,21 +157,22 @@ def main(argv=None):
         url, key = credentials()
         if args.auto_week: args.week = current_week(url, key, args.season)
         if args.week is None: parser.error("--week is required unless --auto-week is used")
-        html = get_json("data:application/json,{}", {}) if False else None
         request = Request(NFL_URL.format(season=args.season, week=args.week), headers={"User-Agent":"nfl-betting injury loader"})
         with build_opener(NoRedirect()).open(request, timeout=60) as response: html = response.read().decode("utf-8", "replace")
         records, found = parse_report(html)
-        if not records:
-            print(f"NFL.com has not posted a player injury report for {args.season} Week {args.week} yet. Nothing to load.")
+        if not records and not found:
+            if "Practice Status" in html:
+                raise ValueError("NFL.com page contains Practice Status but no injury rows or team report states were parsed")
+            print(f"NFL.com has not posted an injury report for {args.season} Week {args.week} yet. Nothing to load.")
             return 0
-        if not records and "Practice Status" in html:
-            raise ValueError("NFL.com page contains Practice Status but no injury rows were parsed")
         game_rows = games(url, key, args.season, args.week)
         by_team = {t: g["game_id"] for g in game_rows for t in (g.get("home_team"), g.get("away_team"))}
         captured = datetime.now(timezone.utc).isoformat(); unmatched = sorted({r["team"] for r in records if r["team"] not in by_team})
         rows = [{**r, "season": args.season, "week": args.week, "game_id": by_team.get(r["team"]), "captured_at": captured, "source":"nfl.com"} for r in records if r["team"] in by_team]
+        status_rows = build_report_status(records, found, game_rows, args.season, args.week, captured)
         insert(url, key, rows)
-        print(json.dumps({"teams_found": len(found), "players_found": len(records), "rows_inserted": len(rows), "unmatched_teams": unmatched}))
+        insert_report_status(url, key, status_rows)
+        print(json.dumps({"teams_found": len(found), "players_found": len(records), "rows_inserted": len(rows), "report_status_rows": len(status_rows), "unmatched_teams": unmatched}))
         return 0
     except Exception as exc:
         print(f"Injury load failed: {str(exc)[:300]}"); return 1
