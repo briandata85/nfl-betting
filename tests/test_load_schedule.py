@@ -35,7 +35,6 @@ class ScheduleTests(unittest.TestCase):
             game_date="2026-09-09", kickoff="2026-09-10T00:20:00+00:00",
             away_team="NE", home_team="SEA", stadium="Lumen Field",
             roof="outdoors", surface="fieldturf", game_type="REG",
-            away_score=None, home_score=None, result=None, total=None,
             nflverse_away_moneyline=None, nflverse_home_moneyline=None,
             nflverse_spread_line=None, nflverse_total_line=None)])
 
@@ -77,13 +76,17 @@ class ScheduleTests(unittest.TestCase):
         stored = {}
 
         def receive(request, timeout):
+            if '/result_sync_status?' in request.full_url:
+                response = MagicMock()
+                response.__enter__.return_value.status = 201
+                return response
             self.assertEqual(request.full_url, "https://example.supabase.co/rest/v1/games?on_conflict=game_id")
             self.assertEqual(request.method, "POST")
             self.assertEqual(request.get_header("Apikey"), "sb_secret_test")
             self.assertIsNone(request.get_header("Authorization"))
             self.assertEqual(request.get_header("Prefer"), "resolution=merge-duplicates,return=minimal")
             for row in json.loads(request.data):
-                stored[row["game_id"]] = row
+                stored.setdefault(row["game_id"], {}).update(row)
             response = MagicMock()
             response.__enter__.return_value.status = 201
             return response
@@ -94,6 +97,19 @@ class ScheduleTests(unittest.TestCase):
                                 "https://example.supabase.co", "sb_secret_test")
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored["2026_01_NE_SEA"]["stadium"], "Updated")
+        stored['2026_01_NE_SEA']['home_score'] = 24
+        loader.upsert_games(loader.parse_schedule(csv_text(schedule())),
+                            'https://example.supabase.co', 'sb_secret_test')
+        self.assertEqual(stored['2026_01_NE_SEA']['home_score'],24)
+
+    def test_partial_scores_do_not_settle(self):
+        game = loader.parse_schedule(csv_text(schedule(home_score='24')))[0]
+        self.assertNotIn('home_score',game)
+        self.assertNotIn('result_source',game)
+
+    def test_future_scores_do_not_settle(self):
+        game = loader.parse_schedule(csv_text(schedule(gameday='2099-01-01',home_score='24',away_score='20')))[0]
+        self.assertNotIn('home_score',game)
 
     @patch.object(loader, "build_opener")
     def test_legacy_key(self, build):
@@ -142,3 +158,4 @@ class ScheduleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

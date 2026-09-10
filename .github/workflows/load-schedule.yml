@@ -3,8 +3,8 @@ name: Load 2026 NFL Schedule and Results
 on:
   workflow_dispatch:
   schedule:
-    # Daily at 10:00 UTC to pick up final scores, schedule changes, and nflverse market fields.
-    - cron: '0 10 * * *'
+    # Hourly retries pick up final scores as soon as nflverse publishes them.
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
@@ -31,3 +31,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: python scripts/load_schedule.py
+
