@@ -56,6 +56,7 @@ BEGIN
  g.home_score,g.away_score,g.result_source,g.scores_updated_at,now(),'flat100-v1',to_jsonb(p)
  FROM public.predictions p JOIN public.games g USING(game_id)
  CROSS JOIN LATERAL (SELECT CASE WHEN g.result_source IS NULL OR g.kickoff IS NULL OR g.kickoff>now() THEN 'pending'
+ WHEN p.market_odds IS NULL OR abs(p.market_odds)<100 THEN 'needs_review'
  ELSE public.prediction_outcome(p.market,p.selection,p.market_line,g.home_team,g.away_team,g.home_score,g.away_score) END AS outcome) o
  WHERE p.game_id=target_game
  ON CONFLICT(prediction_id) DO UPDATE SET outcome=excluded.outcome,profit=excluded.profit,
@@ -107,4 +108,5 @@ GRANT SELECT ON public.dashboard_predictions,public.dashboard_latest_odds TO ser
 SELECT public.grade_predictions_for_game(game_id) FROM public.games WHERE game_id IN(SELECT game_id FROM public.predictions);
 NOTIFY pgrst,'reload schema';
 COMMIT;
+
 
