@@ -91,6 +91,20 @@ def parse_schedule(text):
         )
         if game["week"] < 1:
             raise ValueError("Schedule has an invalid week.")
+        # nflverse schedules is a results feed, not a live scoreboard. Only
+        # complete score pairs for past kickoffs are accepted for settlement.
+        has_final = (game['home_score'] is not None and game['away_score'] is not None
+                     and game['kickoff'] is not None
+                     and datetime.fromisoformat(game['kickoff']) < datetime.now(timezone.utc))
+        if has_final:
+            if min(game['home_score'], game['away_score']) < 0:
+                raise ValueError('Negative final score')
+            game['scores_updated_at'] = datetime.now(timezone.utc).isoformat()
+            game['result_source'] = SCHEDULE_URL
+        else:
+            # Omit missing results so transient gaps never erase stored finals.
+            for field in ('home_score', 'away_score', 'result', 'total'):
+                game.pop(field, None)
         games.append(game)
     if not games:
         raise ValueError("No 2026 games found; refusing to report a successful load.")
@@ -125,9 +139,23 @@ def upsert_games(games, url, key):
     # Legacy service_role JWTs need Authorization; new sb_secret_ keys do not.
     if not key.startswith("sb_secret_"):
         headers["Authorization"] = f"Bearer {key}"
+    # PostgREST bulk rows need identical keys. Separate completed and pending
+    # games; missing result keys on pending rows preserve existing finals.
+    groups = {}
+    for game in games:
+        groups.setdefault(tuple(sorted(game)), []).append(game)
+    for group in groups.values():
+        post_rows(group, url, headers)
+    post_rows([{'name': 'nflverse_results',
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'completed_games': sum(g.get('home_score') is not None and g.get('away_score') is not None for g in games),
+                'source': SCHEDULE_URL}], url, headers, 'result_sync_status', 'name')
+
+
+def post_rows(rows, url, headers, table='games', conflict='game_id'):
     request = Request(
-        f"{url}/rest/v1/games?on_conflict=game_id",
-        data=json.dumps(games, allow_nan=False).encode("utf-8"),
+        f"{url}/rest/v1/{table}?on_conflict={conflict}",
+        data=json.dumps(rows, allow_nan=False).encode("utf-8"),
         headers=headers,
         method="POST",
     )
@@ -155,7 +183,7 @@ def main(argv=None):
             print(f"Validated {len(games)} games for {SEASON}; no database writes.")
         else:
             upsert_games(games, url, key)
-            completed = sum(game["home_score"] is not None and game["away_score"] is not None for game in games)
+            completed = sum(game.get("home_score") is not None and game.get("away_score") is not None for game in games)
             print(f"Upserted {len(games)} games for {SEASON}; {completed} have final scores.")
         return 0
     except HTTPError as exc:
@@ -168,3 +196,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
